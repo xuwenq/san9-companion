@@ -22,6 +22,7 @@
 #include "ImageRegion2026.h"
 #include "PresentationSpeed2026.h"
 #include "ThreadBarrier2026.h"
+#include "DeathGradient2026.h"
 
 // 0x409E10 dispatch; message-related names follow the host entry points,
 // not an inferred game action. Values remain the recovered ABI values.
@@ -84,6 +85,7 @@ public:
     std::uint64_t configurationEpoch() const { return configurationEpoch_; }
     void setSkipDurabilitySiegeSelection(bool enabled) { skipDurabilitySiegeSelection_ = enabled; }
     void setComputerWorkTiming(ComputerWorkTiming2026 value) { computerWorkTiming_ = value; }
+    void setDeathGradient(DeathGradient2026 value) { deathGradient_ = value; }
     void setPresentationSpeed(unsigned multiplier);
     void setParameters(const san9::ParameterConfig& parameters);
     san9::PersonConfig personConfig() const;
@@ -138,7 +140,9 @@ private:
     std::uint64_t configurationEpoch_ = 0;
     bool skipDurabilitySiegeSelection_ = true; // Preserve the companion default.
     ComputerWorkTiming2026 computerWorkTiming_;
+    DeathGradient2026 deathGradient_;
     void applyComputerWorkTiming();
+    void applyDeathGradient();
     void modifyBranches(ModifyReason2026 reason);
     bool connectGame(HWND window);
     void animateConnectedStatus();

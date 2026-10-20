@@ -539,6 +539,9 @@ class SettingsPage final : public ui::Dialog
                 L"开启：电脑褒奖开局等待初级60天、高级30天，并取消周期窗口；关闭：恢复初级90天、高级45天及30天周期窗口。");
         tooltip(IDC_SKIP_COMPUTER_ATTACK_START_DELAY,
                 L"取消电脑出征规划的开局等待；关闭时初级等待120天、高级60天。实际出征仍须满足兵力、目标等条件。");
+        const auto &deathGradient = app.configuration().deathGradient;
+        settingsNumber(IDC_LOW_DEATH_RATE, L"低能阵亡率(%)", 0, 100, int(deathGradient.lowRate));
+        settingsNumber(IDC_DEATH_THRESHOLD, L"高能归零阈值", 80, 250, int(deathGradient.threshold));
         for (const auto &field : san9::ParameterConfig::fields())
         {
             if (field.mask)
@@ -577,15 +580,25 @@ class SettingsPage final : public ui::Dialog
         bool skip = checked(IDC_SKIP_DURABILITY_SIEGE_SELECTION);
         const ComputerWorkTiming2026 timing{checked(IDC_IMPROVE_COMPUTER_REWARD_TIMING),
                                             checked(IDC_SKIP_COMPUTER_ATTACK_START_DELAY)};
+        int lowRate = 0, threshold = 0;
+        if (!number(IDC_LOW_DEATH_RATE, 0, 100, lowRate) ||
+            !number(IDC_DEATH_THRESHOLD, 80, 250, threshold))
+        {
+            settingsPage(1);
+            return;
+        }
+        const DeathGradient2026 deathGradient{unsigned(lowRate), unsigned(threshold)};
         if (!savePreference(L"Extensions", L"SkipDurabilitySiegeSelection", skip) ||
             !savePreference(L"Extensions", L"ImproveComputerRewardTiming", timing.improveRewards) ||
-            !savePreference(L"Extensions", L"SkipComputerAttackStartDelay", timing.skipAttackStartDelay))
+            !savePreference(L"Extensions", L"SkipComputerAttackStartDelay", timing.skipAttackStartDelay) ||
+            !savePreferenceNumber(L"Extensions", L"LowDeathRate", unsigned(lowRate)) ||
+            !savePreferenceNumber(L"Extensions", L"DeathThreshold", unsigned(threshold)))
         {
             settingsPage(1);
             message(L"无法写入 San9PKHardSettings.ini，设置尚未确认。");
             return;
         }
-        if (app.commitParameters(draft, skip, timing)) finish(IDOK);
+        if (app.commitParameters(draft, skip, timing, deathGradient)) finish(IDOK);
     }
     void command(int id, ui::Event event) override
     {

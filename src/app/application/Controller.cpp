@@ -15,17 +15,19 @@ ApplicationState Controller::state() const
     return {runtime_.session().phase, runtime_.session().result, runtime_.configurationState(),
             queued_ != 0 || epoch_ != runtime_.configurationEpoch(), confirmationPending_};
 }
-std::vector<ConfigLoadError> Controller::load(bool automatic, bool skipSelection, ComputerWorkTiming2026 timing)
+std::vector<ConfigLoadError> Controller::load(bool automatic, bool skipSelection, ComputerWorkTiming2026 timing,
+                                           DeathGradient2026 deathGradient)
 {
-    return load(san9::executableFile(L""), automatic, skipSelection, timing);
+    return load(san9::executableFile(L""), automatic, skipSelection, timing, deathGradient);
 }
 std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &directory, bool automatic, bool skipSelection,
-                                           ComputerWorkTiming2026 timing)
+                                           ComputerWorkTiming2026 timing, DeathGradient2026 deathGradient)
 {
     std::vector<ConfigLoadError> errors;
     configuration_.cityAutomatic = automatic;
     configuration_.skipSiegeSelection = skipSelection;
     configuration_.computerWorkTiming = timing;
+    configuration_.deathGradient = deathGradient;
     queued_ |= Parameters | Cities;
     auto load = [&](auto &value, ConfigurationSource &source, InputGroup group, const wchar_t *name) {
         const auto result = loadConfigFile(directory / name, value);
@@ -42,12 +44,14 @@ std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &direc
     stageConfiguration();
     return errors;
 }
-bool Controller::commitParameters(const san9::ParameterConfig &value, bool skipSelection, ComputerWorkTiming2026 timing)
+bool Controller::commitParameters(const san9::ParameterConfig &value, bool skipSelection, ComputerWorkTiming2026 timing,
+                                  DeathGradient2026 deathGradient)
 {
     if (value.validate().error != san9::ParameterError::none) return false;
     configuration_.parameters = value;
     configuration_.skipSiegeSelection = skipSelection;
     configuration_.computerWorkTiming = timing;
+    configuration_.deathGradient = deathGradient;
     configuration_.sources.parameters = confirmedSource(configuration_.sources.parameters);
     queued_ |= Parameters;
     confirmationPending_ = true;
@@ -122,6 +126,7 @@ void Controller::stageConfiguration()
         runtime_.setParameters(configuration_.parameters);
         runtime_.setSkipDurabilitySiegeSelection(configuration_.skipSiegeSelection);
         runtime_.setComputerWorkTiming(configuration_.computerWorkTiming);
+        runtime_.setDeathGradient(configuration_.deathGradient);
     }
     if (queued_ & Persons) runtime_.setPersonConfig(configuration_.persons);
     if (queued_ & Cities)

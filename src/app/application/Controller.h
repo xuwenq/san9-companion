@@ -28,10 +28,12 @@ class Controller final
     bool hasGameSession() const { return runtime_.hasGameSession(); }
     ApplicationState state() const;
     void setCallbackWindow(HWND endpoint) { runtime_.setCallbackWindow(endpoint); }
-    std::vector<ConfigLoadError> load(bool cityAutomatic, bool skipSelection, ComputerWorkTiming2026 timing);
+    std::vector<ConfigLoadError> load(bool cityAutomatic, bool skipSelection, ComputerWorkTiming2026 timing,
+                                      DeathGradient2026 deathGradient = {});
     std::vector<ConfigLoadError> load(const std::filesystem::path &directory, bool cityAutomatic, bool skipSelection,
-                                    ComputerWorkTiming2026 timing);
-    bool commitParameters(const san9::ParameterConfig &value, bool skipSelection, ComputerWorkTiming2026 timing);
+                                    ComputerWorkTiming2026 timing, DeathGradient2026 deathGradient = {});
+    bool commitParameters(const san9::ParameterConfig &value, bool skipSelection, ComputerWorkTiming2026 timing,
+                          DeathGradient2026 deathGradient);
     bool commitPersons(const san9::PersonConfig &value);
     bool commitCities(const san9::CityConfig &value, bool automatic);
     bool commitSkills(const san9::SkillConfig &value);

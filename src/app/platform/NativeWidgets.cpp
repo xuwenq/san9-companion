@@ -494,7 +494,36 @@ void Dialog::settingsPages(const std::vector<MenuItem> &options)
         check(item.id, item.checked);
         top += 22;
     }
+    settingsTop_ = top;
     settingsPage(0);
+}
+void Dialog::settingsNumber(int id, const wchar_t *label, int minimum, int maximum, int value)
+{
+    (void)minimum;
+    (void)maximum;
+    RECT captionRect{23, settingsTop_, 200, settingsTop_ + 12};
+    MapDialogRect(window_, &captionRect);
+    const auto caption = CreateWindowExW(0, L"Static", label, WS_CHILD,
+                                         captionRect.left, captionRect.top,
+                                         captionRect.right - captionRect.left,
+                                         captionRect.bottom - captionRect.top, window_,
+                                         nullptr, instance(), nullptr);
+    if (!caption) throw std::runtime_error("cannot create settings label");
+    extensions_.push_back(caption);
+    SendMessageW(caption, WM_SETFONT, SendMessageW(window_, WM_GETFONT, 0, 0), TRUE);
+
+    RECT fieldRect{230, settingsTop_, 420, settingsTop_ + 12};
+    MapDialogRect(window_, &fieldRect);
+    const auto handle = CreateWindowExW(0, L"Edit", L"", WS_CHILD | WS_TABSTOP | WS_BORDER | ES_NUMBER,
+                                        fieldRect.left, fieldRect.top,
+                                        fieldRect.right - fieldRect.left,
+                                        fieldRect.bottom - fieldRect.top, window_,
+                                        reinterpret_cast<HMENU>(id), instance(), nullptr);
+    if (!handle) throw std::runtime_error("cannot create settings number field");
+    extensions_.push_back(handle);
+    SendMessageW(handle, WM_SETFONT, SendMessageW(window_, WM_GETFONT, 0, 0), TRUE);
+    number(id, value);
+    settingsTop_ += 22;
 }
 void Dialog::settingsPage(int page)
 {

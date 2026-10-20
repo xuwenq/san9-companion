@@ -5,6 +5,7 @@
 #include "../../model/SkillConfig.h"
 #include "../../model/FormationConfig.h"
 #include "../../runtime/ComputerWorkTiming2026.h"
+#include "../../runtime/DeathGradient2026.h"
 
 namespace app
 {
@@ -37,6 +38,7 @@ struct Configuration
     bool cityAutomatic = false;
     bool skipSiegeSelection = true;
     ComputerWorkTiming2026 computerWorkTiming;
+    DeathGradient2026 deathGradient;
     unsigned presentationSpeed = 1;
 };
 } // namespace app

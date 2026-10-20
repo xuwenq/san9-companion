@@ -151,6 +151,33 @@ void Runtime2026::applyComputerWorkTiming() {
     writePatch(0x6574F0u, reward.data(), reward.size()); // Work code 15.
     writePatch(0x6574C0u, &attackDelay, sizeof(attackDelay)); // Work code 9 only.
 }
+
+void Runtime2026::applyDeathGradient() {
+    // RE-SAN9PK death gradient: when "高能武将可阵亡" is enabled, the original
+    // single-stat chance (min(30, 80 - [officer+0x50])) is replaced by a MAX(四维)
+    // gradient (min(lowRate, threshold - MAX)). MAX is already in EAX at the
+    // patch sites, so only the three bytes below need to change.
+    const auto state = reinterpret_cast<std::uintptr_t>(state_.data());
+    const bool enabled = *(DWORD *)(state + san9::injection2026::AllPersonDeadEnabled) != 0;
+    const DWORD threshold = deathGradient_.threshold > 127u ? 127u : deathGradient_.threshold;
+    const DWORD lowRate = deathGradient_.lowRate > 127u ? 127u : deathGradient_.lowRate;
+    // 0x502667: "mov esi, [esi+0x50]" -> "mov esi, eax; nop" (use MAX instead of the stat).
+    const BYTE loadMax[3] = {0x8B, 0xF0, 0x90};
+    const BYTE loadStat[3] = {0x8B, 0x76, 0x50};
+    const BYTE slopeThreshold = static_cast<BYTE>(threshold);
+    const BYTE slopeOriginal = 0x50;
+    const BYTE capRate = static_cast<BYTE>(lowRate);
+    const BYTE capOriginal = 0x1E;
+    if (enabled) {
+        writePatch(reinterpret_cast<LPVOID>(0x502667u), loadMax, sizeof(loadMax));
+        writePatch(reinterpret_cast<LPVOID>(0x50266Du), &slopeThreshold, 1u);
+        writePatch(reinterpret_cast<LPVOID>(0x502677u), &capRate, 1u);
+    } else {
+        writePatch(reinterpret_cast<LPVOID>(0x502667u), loadStat, sizeof(loadStat));
+        writePatch(reinterpret_cast<LPVOID>(0x50266Du), &slopeOriginal, 1u);
+        writePatch(reinterpret_cast<LPVOID>(0x502677u), &capOriginal, 1u);
+    }
+}
 bool Runtime2026::togglePlayerForce(unsigned index) {
     if (index >= 50 || process_.state().phase != SessionPhase2026::Active) return false;
     return runOperation([&] {

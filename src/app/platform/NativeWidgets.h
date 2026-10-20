@@ -60,6 +60,7 @@ class Dialog
     bool savePreferenceNumber(const wchar_t *section, const wchar_t *key, unsigned value) const;
     unsigned preferenceNumber(const wchar_t *section, const wchar_t *key, unsigned fallback) const;
     void settingsPages(const std::vector<MenuItem> &options);
+    void settingsNumber(int id, const wchar_t *label, int minimum, int maximum, int value);
     void settingsPage(int page);
     HWND endpoint() const
     {
@@ -103,6 +104,7 @@ class Dialog
     HWND tooltip_ = nullptr;
     std::map<int, std::wstring> tooltipText_;
     bool modal_ = false;
+    int settingsTop_ = 49;
 };
 std::wstring gameText(char *value, size_t capacity);
 bool smokeTooltipUpdates(Dialog &dialog, int id);
