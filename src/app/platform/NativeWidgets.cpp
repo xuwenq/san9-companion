@@ -443,6 +443,19 @@ bool Dialog::preference(const wchar_t *section, const wchar_t *key, bool fallbac
 {
     return GetPrivateProfileIntW(section, key, fallback ? 1 : 0, preferences().c_str()) != 0;
 }
+bool Dialog::savePreferenceString(const wchar_t *section, const wchar_t *key, const std::wstring &value) const
+{
+    if (smoke) return true;
+    return WritePrivateProfileStringW(section, key, value.c_str(), preferences().c_str()) != FALSE;
+}
+std::wstring Dialog::preferenceString(const wchar_t *section, const wchar_t *key, const std::wstring &fallback) const
+{
+    std::wstring buffer(4096, L'\0');
+    const auto length = GetPrivateProfileStringW(section, key, fallback.c_str(), buffer.data(),
+                                                 static_cast<DWORD>(buffer.size()), preferences().c_str());
+    buffer.resize(length);
+    return buffer;
+}
 void Dialog::settingsPages(const std::vector<MenuItem> &options)
 {
     RECT rect{};
@@ -523,6 +536,32 @@ void Dialog::settingsNumber(int id, const wchar_t *label, int minimum, int maxim
     extensions_.push_back(handle);
     SendMessageW(handle, WM_SETFONT, SendMessageW(window_, WM_GETFONT, 0, 0), TRUE);
     number(id, value);
+    settingsTop_ += 22;
+}
+void Dialog::settingsText(int id, const wchar_t *label, const std::wstring &value)
+{
+    RECT captionRect{23, settingsTop_, 200, settingsTop_ + 12};
+    MapDialogRect(window_, &captionRect);
+    const auto caption = CreateWindowExW(0, L"Static", label, WS_CHILD,
+                                         captionRect.left, captionRect.top,
+                                         captionRect.right - captionRect.left,
+                                         captionRect.bottom - captionRect.top, window_,
+                                         nullptr, instance(), nullptr);
+    if (!caption) throw std::runtime_error("cannot create settings label");
+    extensions_.push_back(caption);
+    SendMessageW(caption, WM_SETFONT, SendMessageW(window_, WM_GETFONT, 0, 0), TRUE);
+
+    RECT fieldRect{230, settingsTop_, 420, settingsTop_ + 12};
+    MapDialogRect(window_, &fieldRect);
+    const auto handle = CreateWindowExW(0, L"Edit", L"", WS_CHILD | WS_TABSTOP | WS_BORDER,
+                                        fieldRect.left, fieldRect.top,
+                                        fieldRect.right - fieldRect.left,
+                                        fieldRect.bottom - fieldRect.top, window_,
+                                        reinterpret_cast<HMENU>(id), instance(), nullptr);
+    if (!handle) throw std::runtime_error("cannot create settings text field");
+    extensions_.push_back(handle);
+    SendMessageW(handle, WM_SETFONT, SendMessageW(window_, WM_GETFONT, 0, 0), TRUE);
+    text(id, value);
     settingsTop_ += 22;
 }
 void Dialog::settingsPage(int page)

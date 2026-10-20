@@ -220,6 +220,8 @@
 #define IDC_PRESENTATION_SPEED           1205
 #define IDC_LOW_DEATH_RATE              1206
 #define IDC_DEATH_THRESHOLD             1207
+#define IDC_GROWTH_BOOST_LIST           1208
+#define IDC_GROWTH_BOOST_MULTIPLIER     1209
 #define IDM_PLAYER_FORCE_START          32771
 #define IDM_PLAYER_FORCE_END            32820
 

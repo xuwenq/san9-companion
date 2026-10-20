@@ -6,6 +6,7 @@
 #include "../../model/FormationConfig.h"
 #include "../../runtime/ComputerWorkTiming2026.h"
 #include "../../runtime/DeathGradient2026.h"
+#include "../../runtime/GrowthBoost2026.h"
 
 namespace app
 {
@@ -39,6 +40,7 @@ struct Configuration
     bool skipSiegeSelection = true;
     ComputerWorkTiming2026 computerWorkTiming;
     DeathGradient2026 deathGradient;
+    GrowthBoost2026 growthBoost;
     unsigned presentationSpeed = 1;
 };
 } // namespace app

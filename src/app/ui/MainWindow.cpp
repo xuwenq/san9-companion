@@ -28,7 +28,9 @@ class MainWindow final : public ui::Dialog
                                    {preference(L"Extensions", L"ImproveComputerRewardTiming", true),
                                     preference(L"Extensions", L"SkipComputerAttackStartDelay", false)},
                                    {preferenceNumber(L"Extensions", L"LowDeathRate", 40),
-                                    preferenceNumber(L"Extensions", L"DeathThreshold", 100)});
+                                    preferenceNumber(L"Extensions", L"DeathThreshold", 100)},
+                                   {preferenceString(L"Extensions", L"GrowthBoostList", L""),
+                                    preferenceNumber(L"Extensions", L"GrowthBoostMultiplier", 1)});
             for (const auto &error : errors)
                 message(error.file + L"：" + configFileText(error.result));
             const auto rate=preferenceNumber(L"Presentation",L"Speed",1);

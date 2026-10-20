@@ -178,6 +178,10 @@ void Runtime2026::applyDeathGradient() {
         writePatch(reinterpret_cast<LPVOID>(0x502677u), &capOriginal, 1u);
     }
 }
+void Runtime2026::applyGrowthBoost() {
+    // Placeholder: the per-officer growth multiplier injection is implemented next.
+}
+
 bool Runtime2026::togglePlayerForce(unsigned index) {
     if (index >= 50 || process_.state().phase != SessionPhase2026::Active) return false;
     return runOperation([&] {

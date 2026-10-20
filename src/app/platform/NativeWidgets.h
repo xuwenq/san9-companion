@@ -59,8 +59,11 @@ class Dialog
     bool preference(const wchar_t *section, const wchar_t *key, bool fallback) const;
     bool savePreferenceNumber(const wchar_t *section, const wchar_t *key, unsigned value) const;
     unsigned preferenceNumber(const wchar_t *section, const wchar_t *key, unsigned fallback) const;
+    bool savePreferenceString(const wchar_t *section, const wchar_t *key, const std::wstring &value) const;
+    std::wstring preferenceString(const wchar_t *section, const wchar_t *key, const std::wstring &fallback) const;
     void settingsPages(const std::vector<MenuItem> &options);
     void settingsNumber(int id, const wchar_t *label, int minimum, int maximum, int value);
+    void settingsText(int id, const wchar_t *label, const std::wstring &value);
     void settingsPage(int page);
     HWND endpoint() const
     {
