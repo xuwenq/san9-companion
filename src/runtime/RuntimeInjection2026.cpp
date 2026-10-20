@@ -379,6 +379,11 @@ void Runtime2026::installCoreHooks()
   writePatch(dword_42F13C, &unk_428A30, 0x98u);
   writePatch(dword_42F12C, &codeGetLeagueGoal, 0xBCu);
   writePatch(dword_42F11C, &codeTrainBasicAbility, 0x37u);
+  // Reverse the basic-ability coefficient: "sub" -> "add" so a larger
+  // coefficient strengthens the trained officer instead of weakening it.
+  const BYTE addOpcode = 0x00;
+  writePatch(reinterpret_cast<char *>(dword_42F11C) + 0x1D, &addOpcode, 1u);
+  writePatch(reinterpret_cast<char *>(dword_42F11C) + 0x2E, &addOpcode, 1u);
   writePatch(dword_42F10C, &unk_429050, 0x2Du);
 }
 
