@@ -159,8 +159,8 @@ void Runtime2026::applyDeathGradient() {
     // patch sites, so only the three bytes below need to change.
     const auto state = reinterpret_cast<std::uintptr_t>(state_.data());
     const bool enabled = *(DWORD *)(state + san9::injection2026::AllPersonDeadEnabled) != 0;
-    const DWORD threshold = deathGradient_.threshold > 127u ? 127u : deathGradient_.threshold;
-    const DWORD lowRate = deathGradient_.lowRate > 127u ? 127u : deathGradient_.lowRate;
+    const DWORD threshold = deathGradient_.threshold > 120u ? 120u : deathGradient_.threshold;
+    const DWORD lowRate = deathGradient_.lowRate > 100u ? 100u : deathGradient_.lowRate;
     // 0x502667: "mov esi, [esi+0x50]" -> "mov esi, eax; nop" (use MAX instead of the stat).
     const BYTE loadMax[3] = {0x8B, 0xF0, 0x90};
     const BYTE loadStat[3] = {0x8B, 0x76, 0x50};

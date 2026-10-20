@@ -541,7 +541,7 @@ class SettingsPage final : public ui::Dialog
                 L"取消电脑出征规划的开局等待；关闭时初级等待120天、高级60天。实际出征仍须满足兵力、目标等条件。");
         const auto &deathGradient = app.configuration().deathGradient;
         settingsNumber(IDC_LOW_DEATH_RATE, L"低能阵亡率(%)", 0, 100, int(deathGradient.lowRate));
-        settingsNumber(IDC_DEATH_THRESHOLD, L"高能归零阈值", 80, 250, int(deathGradient.threshold));
+        settingsNumber(IDC_DEATH_THRESHOLD, L"高能归零阈值", 80, 120, int(deathGradient.threshold));
         for (const auto &field : san9::ParameterConfig::fields())
         {
             if (field.mask)
@@ -582,7 +582,7 @@ class SettingsPage final : public ui::Dialog
                                             checked(IDC_SKIP_COMPUTER_ATTACK_START_DELAY)};
         int lowRate = 0, threshold = 0;
         if (!number(IDC_LOW_DEATH_RATE, 0, 100, lowRate) ||
-            !number(IDC_DEATH_THRESHOLD, 80, 250, threshold))
+            !number(IDC_DEATH_THRESHOLD, 80, 120, threshold))
         {
             settingsPage(1);
             return;

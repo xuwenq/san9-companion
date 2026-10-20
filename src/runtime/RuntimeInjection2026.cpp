@@ -1149,7 +1149,7 @@ void Runtime2026::applyParameterPatches()
   patchValue = selectedSoldierCommandKillerIndexBias + 204;
   writePatch((char *)dword_42F49C + 88, &patchValue, 1u);
   if ( *(_DWORD *)(state + san9::injection2026::AllPersonDeadEnabled) != 0 )
-    patchValue = deathGradient_.threshold > 127u ? 127u : deathGradient_.threshold;
+    patchValue = deathGradient_.threshold > 120u ? 120u : deathGradient_.threshold;
   else
     patchValue = *(_DWORD *)(state + 6612);
   writePatch(*(LPVOID *)(state + 6596), &patchValue, 1u);
