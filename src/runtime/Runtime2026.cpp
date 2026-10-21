@@ -257,6 +257,18 @@ void Runtime2026::applyGrowthBoost() {
     writePatch(reinterpret_cast<LPVOID>(codeBlockTail), jump, sizeof(jump));
 }
 
+void Runtime2026::applyCultivate() {
+    const auto state = reinterpret_cast<std::uintptr_t>(state_.data());
+    const bool enabled = *(DWORD *)(state + san9::injection2026::EnableTrainEnabled) != 0;
+    const BYTE duration = enabled
+        ? static_cast<BYTE>((std::min)((std::max)(cultivate_.durationRounds, 3u), 12u))
+        : static_cast<BYTE>(9);
+    const BYTE activate = enabled ? 1 : 0;
+    // 训练回合/培养时长 (0x14FA656) and the first 小兵 activation flag (0x6613EE).
+    writePatch(reinterpret_cast<LPVOID>(0x14FA656u), &duration, 1u);
+    writePatch(reinterpret_cast<LPVOID>(0x6613EEu), &activate, 1u);
+}
+
 bool Runtime2026::togglePlayerForce(unsigned index) {
     if (index >= 50 || process_.state().phase != SessionPhase2026::Active) return false;
     return runOperation([&] {

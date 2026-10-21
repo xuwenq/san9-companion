@@ -545,6 +545,7 @@ class SettingsPage final : public ui::Dialog
         const auto &growthBoost = app.configuration().growthBoost;
         settingsText(IDC_GROWTH_BOOST_LIST, L"成长倍率武将ID", growthBoost.officerList);
         settingsNumber(IDC_GROWTH_BOOST_MULTIPLIER, L"成长倍率(x)", 1, 10, int(growthBoost.multiplier));
+        settingsNumber(IDC_CULTIVATE_DURATION, L"培养时长(旬)", 3, 12, int(app.configuration().cultivate.durationRounds));
         for (const auto &field : san9::ParameterConfig::fields())
         {
             if (field.mask)
@@ -583,29 +584,32 @@ class SettingsPage final : public ui::Dialog
         bool skip = checked(IDC_SKIP_DURABILITY_SIEGE_SELECTION);
         const ComputerWorkTiming2026 timing{checked(IDC_IMPROVE_COMPUTER_REWARD_TIMING),
                                             checked(IDC_SKIP_COMPUTER_ATTACK_START_DELAY)};
-        int lowRate = 0, threshold = 0, multiplier = 1;
+        int lowRate = 0, threshold = 0, multiplier = 1, duration = 9;
         if (!number(IDC_LOW_DEATH_RATE, 0, 100, lowRate) ||
             !number(IDC_DEATH_THRESHOLD, 80, 120, threshold) ||
-            !number(IDC_GROWTH_BOOST_MULTIPLIER, 1, 10, multiplier))
+            !number(IDC_GROWTH_BOOST_MULTIPLIER, 1, 10, multiplier) ||
+            !number(IDC_CULTIVATE_DURATION, 3, 12, duration))
         {
             settingsPage(1);
             return;
         }
         const DeathGradient2026 deathGradient{unsigned(lowRate), unsigned(threshold)};
         const GrowthBoost2026 growthBoost{text(IDC_GROWTH_BOOST_LIST), unsigned(multiplier)};
+        const Cultivate2026 cultivate{unsigned(duration)};
         if (!savePreference(L"Extensions", L"SkipDurabilitySiegeSelection", skip) ||
             !savePreference(L"Extensions", L"ImproveComputerRewardTiming", timing.improveRewards) ||
             !savePreference(L"Extensions", L"SkipComputerAttackStartDelay", timing.skipAttackStartDelay) ||
             !savePreferenceNumber(L"Extensions", L"LowDeathRate", unsigned(lowRate)) ||
             !savePreferenceNumber(L"Extensions", L"DeathThreshold", unsigned(threshold)) ||
             !savePreferenceString(L"Extensions", L"GrowthBoostList", growthBoost.officerList) ||
-            !savePreferenceNumber(L"Extensions", L"GrowthBoostMultiplier", growthBoost.multiplier))
+            !savePreferenceNumber(L"Extensions", L"GrowthBoostMultiplier", growthBoost.multiplier) ||
+            !savePreferenceNumber(L"Extensions", L"CultivateDuration", cultivate.durationRounds))
         {
             settingsPage(1);
             message(L"无法写入 San9PKHardSettings.ini，设置尚未确认。");
             return;
         }
-        if (app.commitParameters(draft, skip, timing, deathGradient, growthBoost)) finish(IDOK);
+        if (app.commitParameters(draft, skip, timing, deathGradient, growthBoost, cultivate)) finish(IDOK);
     }
     void command(int id, ui::Event event) override
     {

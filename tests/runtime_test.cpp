@@ -1467,7 +1467,7 @@ void controllerTest(const std::filesystem::path &configurationDirectory) {
     for (int i=0; i<6; ++i) controller.poll();
     check(controller.hasGameSession() && load(0x14FDAD0+0x64)==91, "reconnect restores the confirmed input, not derived state");
     auto retriedParameters = controller.configuration().parameters; retriedParameters.set(1164,1);
-    check(controller.commitParameters(retriedParameters,true,{},{},{}), "parameter confirmation before recoverable failure");
+    check(controller.commitParameters(retriedParameters,true,{},{},{},{}), "parameter confirmation before recoverable failure");
     fault=Fault::Write; faultAt=calls[static_cast<size_t>(Fault::Write)]+3; partialFailure=true;
     controller.applyConfirmedConfiguration();
     check(controller.state().result==OperationResult2026::RolledBack && controller.state().confirmationPending &&
@@ -1476,11 +1476,11 @@ void controllerTest(const std::filesystem::path &configurationDirectory) {
     check(!controller.state().confirmationPending && load(4733494,2)==59792,
           "next poll retries a failed parameter confirmation instead of reporting idle success");
     auto inFlight = controller.configuration().parameters; inFlight.set(1164,0);
-    check(controller.commitParameters(inFlight,true,{},{},{}), "submit first in-flight parameter revision");
+    check(controller.commitParameters(inFlight,true,{},{},{},{}), "submit first in-flight parameter revision");
     writeCallback = [&] {
         check(controller.state().phase==SessionPhase2026::Applying, "confirmation callback runs during application");
         inFlight.set(1164,1);
-        check(controller.commitParameters(inFlight,true,{},{},{}), "new revision accepted during Applying");
+        check(controller.commitParameters(inFlight,true,{},{},{},{}), "new revision accepted during Applying");
     };
     controller.applyConfirmedConfiguration();
     check(controller.state().inputsQueued && controller.state().confirmationPending && load(4733494,2)==33807,
@@ -1499,7 +1499,7 @@ void controllerTest(const std::filesystem::path &configurationDirectory) {
     for (int i=0; i<6; ++i) recovery.poll();
     check(recovery.hasGameSession() && !recovery.state().confirmationPending, "successful connection acknowledges parameters");
     auto parameters = recovery.configuration().parameters; parameters.set(1164,1);
-    check(recovery.commitParameters(parameters,true,{},{},{}), "first parameter confirmation");
+    check(recovery.commitParameters(parameters,true,{},{},{},{}), "first parameter confirmation");
     fault=Fault::Write; faultAt=calls[static_cast<size_t>(Fault::Write)]+15;
     partialFailure=true; blockRecovery=true;
     recovery.applyConfirmedConfiguration();
@@ -1515,7 +1515,7 @@ void controllerTest(const std::filesystem::path &configurationDirectory) {
     auto latestPersons = recovery.configuration().persons; latestPersons.levels[0] = 1;
     auto latestCities = recovery.configuration().cities; latestCities.limits[0].income = 11;
     auto latestFormations = recovery.configuration().formations; latestFormations.entries[0].range = 4;
-    check(recovery.commitParameters(parameters,false,{false,true},{},{}) && recovery.commitSkills(latestSkills) &&
+    check(recovery.commitParameters(parameters,false,{false,true},{},{},{}) && recovery.commitSkills(latestSkills) &&
           recovery.commitPersons(latestPersons) && recovery.commitCities(latestCities,true) &&
           recovery.commitFormations(latestFormations), "all five configuration groups can queue during recovery");
     check(core.skillConfig().encode()==retainedSkill && core.personConfig().encodeLevels()==retainedPerson &&

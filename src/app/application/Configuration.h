@@ -7,6 +7,7 @@
 #include "../../runtime/ComputerWorkTiming2026.h"
 #include "../../runtime/DeathGradient2026.h"
 #include "../../runtime/GrowthBoost2026.h"
+#include "../../runtime/Cultivate2026.h"
 
 namespace app
 {
@@ -41,6 +42,7 @@ struct Configuration
     ComputerWorkTiming2026 computerWorkTiming;
     DeathGradient2026 deathGradient;
     GrowthBoost2026 growthBoost;
+    Cultivate2026 cultivate;
     unsigned presentationSpeed = 1;
 };
 } // namespace app

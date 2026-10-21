@@ -16,13 +16,14 @@ ApplicationState Controller::state() const
             queued_ != 0 || epoch_ != runtime_.configurationEpoch(), confirmationPending_};
 }
 std::vector<ConfigLoadError> Controller::load(bool automatic, bool skipSelection, ComputerWorkTiming2026 timing,
-                                           DeathGradient2026 deathGradient, GrowthBoost2026 growthBoost)
+                                           DeathGradient2026 deathGradient, GrowthBoost2026 growthBoost,
+                                           Cultivate2026 cultivate)
 {
-    return load(san9::executableFile(L""), automatic, skipSelection, timing, deathGradient, growthBoost);
+    return load(san9::executableFile(L""), automatic, skipSelection, timing, deathGradient, growthBoost, cultivate);
 }
 std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &directory, bool automatic, bool skipSelection,
                                            ComputerWorkTiming2026 timing, DeathGradient2026 deathGradient,
-                                           GrowthBoost2026 growthBoost)
+                                           GrowthBoost2026 growthBoost, Cultivate2026 cultivate)
 {
     std::vector<ConfigLoadError> errors;
     configuration_.cityAutomatic = automatic;
@@ -30,6 +31,7 @@ std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &direc
     configuration_.computerWorkTiming = timing;
     configuration_.deathGradient = deathGradient;
     configuration_.growthBoost = growthBoost;
+    configuration_.cultivate = cultivate;
     queued_ |= Parameters | Cities;
     auto load = [&](auto &value, ConfigurationSource &source, InputGroup group, const wchar_t *name) {
         const auto result = loadConfigFile(directory / name, value);
@@ -47,7 +49,7 @@ std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &direc
     return errors;
 }
 bool Controller::commitParameters(const san9::ParameterConfig &value, bool skipSelection, ComputerWorkTiming2026 timing,
-                                  DeathGradient2026 deathGradient, GrowthBoost2026 growthBoost)
+                                  DeathGradient2026 deathGradient, GrowthBoost2026 growthBoost, Cultivate2026 cultivate)
 {
     if (value.validate().error != san9::ParameterError::none) return false;
     configuration_.parameters = value;
@@ -55,6 +57,7 @@ bool Controller::commitParameters(const san9::ParameterConfig &value, bool skipS
     configuration_.computerWorkTiming = timing;
     configuration_.deathGradient = deathGradient;
     configuration_.growthBoost = growthBoost;
+    configuration_.cultivate = cultivate;
     configuration_.sources.parameters = confirmedSource(configuration_.sources.parameters);
     queued_ |= Parameters;
     confirmationPending_ = true;
@@ -131,6 +134,7 @@ void Controller::stageConfiguration()
         runtime_.setComputerWorkTiming(configuration_.computerWorkTiming);
         runtime_.setDeathGradient(configuration_.deathGradient);
         runtime_.setGrowthBoost(configuration_.growthBoost);
+        runtime_.setCultivate(configuration_.cultivate);
     }
     if (queued_ & Persons) runtime_.setPersonConfig(configuration_.persons);
     if (queued_ & Cities)
