@@ -269,6 +269,14 @@ void Runtime2026::applyCultivate() {
     writePatch(reinterpret_cast<LPVOID>(0x6613EEu), &activate, 1u);
 }
 
+void Runtime2026::applyProficiencyCap() {
+    // Raise the game's proficiency clamp from 1000 to 65535 (SanIXPKCheat's max).
+    // 0x406A70 is min(value, 1000): "cmp eax,0x3E8" and "mov eax,0x3E8".
+    const DWORD cap = 0xFFFF;
+    writePatch(reinterpret_cast<LPVOID>(0x406A75u), &cap, 4u);
+    writePatch(reinterpret_cast<LPVOID>(0x406A80u), &cap, 4u);
+}
+
 bool Runtime2026::togglePlayerForce(unsigned index) {
     if (index >= 50 || process_.state().phase != SessionPhase2026::Active) return false;
     return runOperation([&] {

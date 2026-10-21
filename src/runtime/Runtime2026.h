@@ -151,6 +151,7 @@ private:
     void applyDeathGradient();
     void applyGrowthBoost();
     void applyCultivate();
+    void applyProficiencyCap();
     void modifyBranches(ModifyReason2026 reason);
     bool connectGame(HWND window);
     void animateConnectedStatus();

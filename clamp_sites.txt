@@ -1,0 +1,88 @@
+mov eax,1000 sites: 4
+=== 0x406A7F ===
+  0x406A6B  90                   nop     
+  0x406A6C  90                   nop     
+  0x406A6D  90                   nop     
+  0x406A6E  90                   nop     
+  0x406A6F  90                   nop     
+  0x406A70  8b 44 24 0c          mov     eax, dword ptr [esp + 0xc]
+  0x406A74  3d e8 03 00 00       cmp     eax, 0x3e8
+  0x406A79  7e 17                jle     0x406a92
+  0x406A7B  8b 4c 24 04          mov     ecx, dword ptr [esp + 4]
+  0x406A7F  b8 e8 03 00 00       mov     eax, 0x3e8
+  0x406A84  50                   push    eax
+  0x406A85  8b 44 24 0c          mov     eax, dword ptr [esp + 0xc]
+  0x406A89  50                   push    eax
+  0x406A8A  e8 d1 5e 04 00       call    0x44c960
+  0x406A8F  c2 0c 00             ret     0xc
+  0x406A92  85 c0                test    eax, eax
+  0x406A94  7d 02                jge     0x406a98
+  0x406A96  33 c0                xor     eax, eax
+=== 0x432D49 ===
+  0x432D35  24 14                and     al, 0x14
+  0x432D37  51                   push    ecx
+  0x432D38  c7 44 24 18 0c 00 00 00 mov     dword ptr [esp + 0x18], 0xc
+  0x432D40  e8 0c 33 18 00       call    0x5b6051
+  0x432D45  8b 4c 24 1c          mov     ecx, dword ptr [esp + 0x1c]
+  0x432D49  b8 e8 03 00 00       mov     eax, 0x3e8
+  0x432D4E  83 c4 04             add     esp, 4
+  0x432D51  3b c8                cmp     ecx, eax
+  0x432D53  74 19                je      0x432d6e
+  0x432D55  39 44 24 1c          cmp     dword ptr [esp + 0x1c], eax
+  0x432D59  74 13                je      0x432d6e
+  0x432D5B  5f                   pop     edi
+  0x432D5C  33 c0                xor     eax, eax
+  0x432D5E  5e                   pop     esi
+  0x432D5F  8b 4c 24 18          mov     ecx, dword ptr [esp + 0x18]
+=== 0x43A4B0 ===
+  0x43A49C  0c 89                or      al, 0x89
+  0x43A49E  86 c4                xchg    ah, al
+  0x43A4A0  01 00                add     dword ptr [eax], eax
+  0x43A4A2  00 5e c2             add     byte ptr [esi - 0x3e], bl
+  0x43A4A5  04 00                add     al, 0
+  0x43A4A7  90                   nop     
+  0x43A4A8  90                   nop     
+  0x43A4A9  90                   nop     
+  0x43A4AA  90                   nop     
+  0x43A4AB  90                   nop     
+  0x43A4AC  90                   nop     
+  0x43A4AD  90                   nop     
+  0x43A4AE  90                   nop     
+  0x43A4AF  90                   nop     
+  0x43A4B0  b8 e8 03 00 00       mov     eax, 0x3e8
+  0x43A4B5  c3                   ret     
+  0x43A4B6  90                   nop     
+  0x43A4B7  90                   nop     
+  0x43A4B8  90                   nop     
+  0x43A4B9  90                   nop     
+  0x43A4BA  90                   nop     
+  0x43A4BB  90                   nop     
+  0x43A4BC  90                   nop     
+  0x43A4BD  90                   nop     
+  0x43A4BE  90                   nop     
+  0x43A4BF  90                   nop     
+  0x43A4C0  8b 81 c8 01 00 00    mov     eax, dword ptr [ecx + 0x1c8]
+  0x43A4C6  c3                   ret     
+  0x43A4C7  90                   nop     
+  0x43A4C8  90                   nop     
+  0x43A4C9  90                   nop     
+  0x43A4CA  90                   nop     
+  0x43A4CB  90                   nop     
+=== 0x48874F ===
+  0x48873B  8b 45 34             mov     eax, dword ptr [ebp + 0x34]
+  0x48873E  8d 54 24 34          lea     edx, [esp + 0x34]
+  0x488742  52                   push    edx
+  0x488743  50                   push    eax
+  0x488744  8b cd                mov     ecx, ebp
+  0x488746  e8 85 20 00 00       call    0x48a7d0
+  0x48874B  85 c0                test    eax, eax
+  0x48874D  74 28                je      0x488777
+  0x48874F  b8 e8 03 00 00       mov     eax, 0x3e8
+  0x488754  2b c3                sub     eax, ebx
+  0x488756  57                   push    edi
+  0x488757  50                   push    eax
+  0x488758  ff 15 08 f3 5f 00    call    dword ptr [0x5ff308]
+  0x48875E  8b 4c 24 24          mov     ecx, dword ptr [esp + 0x24]
+  0x488762  83 c4 08             add     esp, 8
+  0x488765  03 f8                add     edi, eax
+  0x488767  8d 1c 0f             lea     ebx, [edi + ecx]
