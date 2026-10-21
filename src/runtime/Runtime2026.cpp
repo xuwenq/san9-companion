@@ -179,7 +179,82 @@ void Runtime2026::applyDeathGradient() {
     }
 }
 void Runtime2026::applyGrowthBoost() {
-    // Placeholder: the per-officer growth multiplier injection is implemented next.
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
+
+    // Parse the comma-separated officer list into a bitset (0..799).
+    std::array<BYTE, 800> bitset{};
+    bool any = false;
+    if (!growthBoost_.officerList.empty()) {
+        size_t pos = 0;
+        while (pos < growthBoost_.officerList.size()) {
+            const auto comma = growthBoost_.officerList.find(L',', pos);
+            const auto token = growthBoost_.officerList.substr(
+                pos, comma == std::wstring::npos ? std::wstring::npos : comma - pos);
+            unsigned id = 0;
+            bool valid = !token.empty();
+            for (wchar_t c : token) {
+                if (c < L'0' || c > L'9') { valid = false; break; }
+                id = id * 10 + static_cast<unsigned>(c - L'0');
+                if (id >= 800) { valid = false; break; }
+            }
+            if (valid) {
+                bitset[id] = 1;
+                any = true;
+            }
+            if (comma == std::wstring::npos) break;
+            pos = comma + 1;
+        }
+    }
+
+    // The tail of codeDynamicAddProficiency: "mov [esp+4],eax; jmp normal"
+    // (the preceding "inc eax" is a conditional part of the original probability
+    // and must stay untouched).
+    const DWORD codeBlockTail = reinterpret_cast<DWORD>(global<LPVOID>(0x42F27C)) + 0x40;
+
+    if (!any || growthBoost_.multiplier <= 1) {
+        const BYTE original[6] = {0x89, 0x44, 0x24, 0x04, 0xEB, 0xBC};
+        writePatch(reinterpret_cast<LPVOID>(codeBlockTail), original, sizeof(original));
+        return;
+    }
+
+    const DWORD multiplier = growthBoost_.multiplier;
+    constexpr size_t codeSize = 51;
+    const size_t totalSize = bitset.size() + sizeof(DWORD) + codeSize;
+    const auto region = allocateMemory(process, nullptr, totalSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!region) return;
+    const DWORD bitsetAddr = reinterpret_cast<DWORD>(region);
+    const DWORD multiplierAddr = bitsetAddr + static_cast<DWORD>(bitset.size());
+    const DWORD codeAddr = multiplierAddr + sizeof(DWORD);
+
+    writePatch(reinterpret_cast<LPVOID>(bitsetAddr), bitset.data(), bitset.size());
+    writePatch(reinterpret_cast<LPVOID>(multiplierAddr), &multiplier, sizeof(multiplier));
+
+    // Growth-multiplier code block. Entry: EAX = growth probability, ESI = officer.
+    // It computes officer id = (ESI - 0x1258EE0) / 0x128, checks the bitset and
+    // multiplies the probability, then stores it and jumps to kakuritsu.
+    std::array<BYTE, codeSize> code = {
+        0x50, 0x8B, 0xC6, 0x2D, 0xE0, 0x8E, 0x58, 0x12, // push eax; mov eax,esi; sub eax,0x1258EE0
+        0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1, // xor edx,edx; mov ecx,0x128; div ecx
+        0xB9, 0x00, 0x00, 0x00, 0x00,                   // mov ecx, bitsetAddr
+        0x80, 0x3C, 0x01, 0x00,                         // cmp byte [ecx+eax], 0
+        0x74, 0x0C,                                     // je not_in_list
+        0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,             // mov ecx, [multiplierAddr]
+        0x58, 0x0F, 0xAF, 0xC1,                         // pop eax; imul eax,ecx
+        0xEB, 0x01,                                     // jmp store
+        0x58,                                           // not_in_list: pop eax
+        0x89, 0x44, 0x24, 0x04,                         // store: mov [esp+4], eax
+        0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00              // jmp [0x5FF2F0]
+    };
+    std::memcpy(code.data() + 0x12, &bitsetAddr, 4);
+    std::memcpy(code.data() + 0x1E, &multiplierAddr, 4);
+    writePatch(reinterpret_cast<LPVOID>(codeAddr), code.data(), code.size());
+
+    // Redirect the tail to the growth-multiplier code block.
+    BYTE jump[6] = {0xE9, 0x00, 0x00, 0x00, 0x00, 0x90};
+    const int rel32 = static_cast<int>(codeAddr - (codeBlockTail + 5));
+    std::memcpy(jump + 1, &rel32, 4);
+    writePatch(reinterpret_cast<LPVOID>(codeBlockTail), jump, sizeof(jump));
 }
 
 bool Runtime2026::togglePlayerForce(unsigned index) {
