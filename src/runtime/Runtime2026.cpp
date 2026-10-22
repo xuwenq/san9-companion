@@ -281,46 +281,73 @@ void Runtime2026::applyOfficerPersonalization() {
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
     if (!process) return;
 
-    // 发动率 (activation rate): only hook when at least one officer is configured.
-    bool anyActivation = false;
-    for (auto v : personalization_.activationPercent) {
-        if (v > 0) { anyActivation = true; break; }
+    // --- 发动率 (activation rate): hook 0x4FEB95's kakuritsu, override chance. ---
+    {
+        bool any = false;
+        for (auto v : personalization_.activationPercent) if (v > 0) { any = true; break; }
+        const LPVOID hook = reinterpret_cast<LPVOID>(0x4FEB95u);
+        if (!any) {
+            const BYTE original[6] = {0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00};
+            writePatch(hook, original, sizeof(original));
+        } else {
+            constexpr size_t codeSize = 42;
+            const size_t total = personalization_.activationPercent.size() + codeSize;
+            const auto region = allocateMemory(process, nullptr, total, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (!region) return;
+            const DWORD arr = reinterpret_cast<DWORD>(region);
+            const DWORD code = arr + static_cast<DWORD>(personalization_.activationPercent.size());
+            writePatch(reinterpret_cast<LPVOID>(arr), personalization_.activationPercent.data(),
+                       personalization_.activationPercent.size());
+            std::array<BYTE, codeSize> c = {
+                0x50, 0x8B, 0xC6, 0x2D, 0xE0, 0x8E, 0x58, 0x12,
+                0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1,
+                0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
+                0x0F, 0xB6, 0x0C, 0x01, 0x85, 0xC9, 0x74, 0x04, 0x89, 0x4C, 0x24, 0x04,
+                0x58, 0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00
+            };
+            std::memcpy(c.data() + 0x12, &arr, 4);
+            writePatch(reinterpret_cast<LPVOID>(code), c.data(), c.size());
+            BYTE jump[6] = {0xE9, 0x00, 0x00, 0x00, 0x00, 0x90};
+            const int rel = static_cast<int>(code - (reinterpret_cast<DWORD>(hook) + 5));
+            std::memcpy(jump + 1, &rel, 4);
+            writePatch(hook, jump, sizeof(jump));
+        }
     }
 
-    const LPVOID hookAddr = reinterpret_cast<LPVOID>(0x4FEB95u);
-    if (!anyActivation) {
-        const BYTE original[6] = {0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00};
-        writePatch(hookAddr, original, sizeof(original));
-        return;
+    // --- 发动间隔 (activation interval): hook 0x4FF08D, override the interval. ---
+    {
+        bool any = false;
+        for (auto v : personalization_.interval) if (v > 0) { any = true; break; }
+        const LPVOID hook = reinterpret_cast<LPVOID>(0x4FF08Du);
+        if (!any) {
+            const BYTE original[8] = {0x8B, 0xCE, 0x50, 0xE8, 0xCB, 0xC6, 0xFF, 0xFF};
+            writePatch(hook, original, sizeof(original));
+        } else {
+            constexpr size_t codeSize = 48;
+            const size_t total = personalization_.interval.size() + codeSize;
+            const auto region = allocateMemory(process, nullptr, total, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (!region) return;
+            const DWORD arr = reinterpret_cast<DWORD>(region);
+            const DWORD code = arr + static_cast<DWORD>(personalization_.interval.size());
+            writePatch(reinterpret_cast<LPVOID>(arr), personalization_.interval.data(),
+                       personalization_.interval.size());
+            // ebx = officer; eax = interval. If interval[id] > 0, replace eax.
+            std::array<BYTE, codeSize> c = {
+                0x50, 0x8B, 0xC3, 0x2D, 0xE0, 0x8E, 0x58, 0x12,
+                0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1,
+                0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
+                0x0F, 0xB6, 0x0C, 0x01, 0x85, 0xC9, 0x74, 0x03, 0x89, 0x0C, 0x24,
+                0x58, 0x8B, 0xCE, 0x50, 0xE8, 0x35, 0xB7, 0x4F, 0x00,
+                0xE9, 0x65, 0xF0, 0x4F, 0x00
+            };
+            std::memcpy(c.data() + 0x12, &arr, 4);
+            writePatch(reinterpret_cast<LPVOID>(code), c.data(), c.size());
+            BYTE jump[8] = {0xE9, 0x00, 0x00, 0x00, 0x00, 0x90, 0x90, 0x90};
+            const int rel = static_cast<int>(code - (reinterpret_cast<DWORD>(hook) + 5));
+            std::memcpy(jump + 1, &rel, 4);
+            writePatch(hook, jump, sizeof(jump));
+        }
     }
-
-    constexpr size_t codeSize = 42;
-    const size_t totalSize = personalization_.activationPercent.size() + codeSize;
-    const auto region = allocateMemory(process, nullptr, totalSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!region) return;
-    const DWORD arrayAddr = reinterpret_cast<DWORD>(region);
-    const DWORD codeAddr = arrayAddr + static_cast<DWORD>(personalization_.activationPercent.size());
-
-    writePatch(reinterpret_cast<LPVOID>(arrayAddr), personalization_.activationPercent.data(),
-               personalization_.activationPercent.size());
-
-    // Helper: officer id = (esi - 0x1258EE0)/0x128; if actPercent[id] > 0, replace chance.
-    std::array<BYTE, codeSize> code = {
-        0x50, 0x8B, 0xC6, 0x2D, 0xE0, 0x8E, 0x58, 0x12, // push eax; mov eax,esi; sub eax,0x1258EE0
-        0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1, // xor edx,edx; mov ecx,0x128; div ecx
-        0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,             // mov ecx, [arrayAddr]
-        0x0F, 0xB6, 0x0C, 0x01,                         // movzx ecx, byte [ecx+eax]
-        0x85, 0xC9, 0x74, 0x04,                         // test ecx,ecx; jz use_original
-        0x89, 0x4C, 0x24, 0x04,                         // mov [esp+4], ecx
-        0x58, 0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00        // use_original: pop eax; jmp [0x5ff2f0]
-    };
-    std::memcpy(code.data() + 0x12, &arrayAddr, 4);
-    writePatch(reinterpret_cast<LPVOID>(codeAddr), code.data(), code.size());
-
-    BYTE jump[6] = {0xE9, 0x00, 0x00, 0x00, 0x00, 0x90};
-    const int rel32 = static_cast<int>(codeAddr - (reinterpret_cast<DWORD>(hookAddr) + 5));
-    std::memcpy(jump + 1, &rel32, 4);
-    writePatch(hookAddr, jump, sizeof(jump));
 }
 
 bool Runtime2026::togglePlayerForce(unsigned index) {
