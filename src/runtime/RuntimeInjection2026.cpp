@@ -1164,6 +1164,7 @@ void Runtime2026::applyParameterPatches()
   applyGrowthBoost();
   applyCultivate();
   applyProficiencyCap();
+  applyOfficerPersonalization();
   patchValue = *(_DWORD *)(state + san9::injection2026::FriendToAlienateEnabled) == 0;
   writeDescriptor(0x424D20u + 12 * (patchValue), PatchSource2026::CompanionAddress);
   if ( *(_DWORD *)(state + san9::injection2026::FriendToAlienateEnabled) != 0 )

@@ -14,6 +14,7 @@
 - 需求 3：在 `Runtime2026::applyGrowthBoost` 实现成长倍率注入——解析列表为 800 字节位图，分配游戏内存写入位图/倍率/注入代码，并把 `codeDynamicAddProficiency` 尾部重定向到该代码：按武将 ID 查位图，命中则将成长概率 `× multiplier`。
 - 需求 2（培养时长可配 + 强制小兵提拔）：新增 `Cultivate2026` 配置（`durationRounds` 默认 9，范围 3~12），接入【扩展配置】与 INI；在 `Runtime2026::applyCultivate` 中，当「开启小兵培养」开启时写入 `0x14FA656`（训练回合）并置 `0x6613EE`（小兵激活标志）=1，关闭时恢复默认。
 - 需求 4（熟练度上限）：在 `Runtime2026::applyProficiencyCap` 把原版熟练度 clamp 从 1000 提升到 65535（`0x406A70` 的 `cmp/mov eax,0x3E8` 两处立即数）。
+- 需求 4（兵法发动率）：新增 `OfficerPersonalization2026`（800 武将 × 威力系数/发动率/发动间隔）并接入配置；在 `Runtime2026::applyOfficerPersonalization` 实现发动率注入——分配游戏内存写入发动率数组与辅助代码，hook `0x4FEB95` 的 `kakuritsu` 调用，按武将 ID 用配置值替换发动概率。
 
 ### 待办
 

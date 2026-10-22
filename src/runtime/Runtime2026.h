@@ -25,6 +25,7 @@
 #include "DeathGradient2026.h"
 #include "GrowthBoost2026.h"
 #include "Cultivate2026.h"
+#include "OfficerPersonalization2026.h"
 
 // 0x409E10 dispatch; message-related names follow the host entry points,
 // not an inferred game action. Values remain the recovered ABI values.
@@ -90,6 +91,7 @@ public:
     void setDeathGradient(DeathGradient2026 value) { deathGradient_ = value; }
     void setGrowthBoost(GrowthBoost2026 value) { growthBoost_ = value; }
     void setCultivate(Cultivate2026 value) { cultivate_ = value; }
+    void setPersonalization(OfficerPersonalization2026 value) { personalization_ = value; }
     void setPresentationSpeed(unsigned multiplier);
     void setParameters(const san9::ParameterConfig& parameters);
     san9::PersonConfig personConfig() const;
@@ -147,11 +149,13 @@ private:
     DeathGradient2026 deathGradient_;
     GrowthBoost2026 growthBoost_;
     Cultivate2026 cultivate_;
+    OfficerPersonalization2026 personalization_;
     void applyComputerWorkTiming();
     void applyDeathGradient();
     void applyGrowthBoost();
     void applyCultivate();
     void applyProficiencyCap();
+    void applyOfficerPersonalization();
     void modifyBranches(ModifyReason2026 reason);
     bool connectGame(HWND window);
     void animateConnectedStatus();

@@ -8,6 +8,7 @@
 #include "../../runtime/DeathGradient2026.h"
 #include "../../runtime/GrowthBoost2026.h"
 #include "../../runtime/Cultivate2026.h"
+#include "../../runtime/OfficerPersonalization2026.h"
 
 namespace app
 {
@@ -43,6 +44,7 @@ struct Configuration
     DeathGradient2026 deathGradient;
     GrowthBoost2026 growthBoost;
     Cultivate2026 cultivate;
+    OfficerPersonalization2026 personalization;
     unsigned presentationSpeed = 1;
 };
 } // namespace app

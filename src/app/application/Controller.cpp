@@ -135,6 +135,7 @@ void Controller::stageConfiguration()
         runtime_.setDeathGradient(configuration_.deathGradient);
         runtime_.setGrowthBoost(configuration_.growthBoost);
         runtime_.setCultivate(configuration_.cultivate);
+        runtime_.setPersonalization(configuration_.personalization);
     }
     if (queued_ & Persons) runtime_.setPersonConfig(configuration_.persons);
     if (queued_ & Cities)
