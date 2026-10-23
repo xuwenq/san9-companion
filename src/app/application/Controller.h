@@ -37,6 +37,7 @@ class Controller final
     bool commitParameters(const san9::ParameterConfig &value, bool skipSelection, ComputerWorkTiming2026 timing,
                           DeathGradient2026 deathGradient, GrowthBoost2026 growthBoost, Cultivate2026 cultivate);
     bool commitPersons(const san9::PersonConfig &value);
+    bool commitPersonalization(const OfficerPersonalization2026 &value);
     bool commitCities(const san9::CityConfig &value, bool automatic);
     bool commitSkills(const san9::SkillConfig &value);
     bool commitFormations(const san9::FormationConfig &value);

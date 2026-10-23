@@ -223,6 +223,9 @@
 #define IDC_GROWTH_BOOST_LIST           1208
 #define IDC_GROWTH_BOOST_MULTIPLIER     1209
 #define IDC_CULTIVATE_DURATION          1210
+#define IDC_POWER_COEF                 1211
+#define IDC_ACTIVATION_RATE             1212
+#define IDC_ACTIVATION_INTERVAL         1213
 #define IDM_PLAYER_FORCE_START          32771
 #define IDM_PLAYER_FORCE_END            32820
 

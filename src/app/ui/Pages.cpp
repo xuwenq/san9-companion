@@ -2,6 +2,7 @@
 #include "../../../assets/ui/resource_ids.h"
 #include "FormBinding.h"
 #include "ConfigFileText.h"
+#include "../../runtime/AppPaths.h"
 #include <algorithm>
 #include <iterator>
 namespace app
@@ -282,6 +283,7 @@ class PersonPage final : public ui::Dialog
   private:
     Controller &app;
     san9::PersonConfig draft;
+    OfficerPersonalization2026 personalizationDraft;
     san9::PersonSnapshot snapshot;
     size_t index = 0, friendship = 0;
     bool loading = false;
@@ -301,6 +303,7 @@ class PersonPage final : public ui::Dialog
         if (app.hasGameSession() && !app.personSnapshot(snapshot))
             message(L"读游戏武将信息失败，仍可按编号编辑配置。");
         draft = app.configuration().persons;
+        personalizationDraft = app.configuration().personalization;
         std::vector<std::wstring> labels;
         labels.reserve(san9::PersonConfig::Count);
         for (size_t i = 0; i < san9::PersonConfig::Count; ++i)
@@ -349,6 +352,9 @@ class PersonPage final : public ui::Dialog
                 mask <<= 1;
             }
         }
+        number(IDC_POWER_COEF, personalizationDraft.powerPercent[index]);
+        number(IDC_ACTIVATION_RATE, personalizationDraft.activationPercent[index]);
+        number(IDC_ACTIVATION_INTERVAL, personalizationDraft.interval[index]);
         loading = false;
     }
     bool savePerson()
@@ -387,10 +393,18 @@ class PersonPage final : public ui::Dialog
         draft.friendships[friendship] = row;
         return true;
     }
+    bool savePersonalization()
+    {
+        return ui::saveNumbers(*this, {
+            ui::bind(IDC_POWER_COEF, 0, 250, personalizationDraft.powerPercent[index]),
+            ui::bind(IDC_ACTIVATION_RATE, 0, 100, personalizationDraft.activationPercent[index]),
+            ui::bind(IDC_ACTIVATION_INTERVAL, 0, 30, personalizationDraft.interval[index])});
+    }
     bool save()
     {
         int maximum = 0;
-        if (!savePerson() || !saveFriendship() || !number(IDC_MAX_EXPERIENCE, 1200, 3000, maximum))
+        if (!savePerson() || !saveFriendship() || !savePersonalization() ||
+            !number(IDC_MAX_EXPERIENCE, 1200, 3000, maximum))
             return false;
         draft.maxExperience = std::uint16_t(maximum);
         return draft.valid();
@@ -399,7 +413,7 @@ class PersonPage final : public ui::Dialog
     {
         if (id == ID_EXIT && event == ui::Event::Click)
         {
-            if (save() && app.commitPersons(draft))
+            if (save() && app.commitPersons(draft) && app.commitPersonalization(personalizationDraft))
             {
                 finish(IDOK);
             }
@@ -414,6 +428,9 @@ class PersonPage final : public ui::Dialog
                 const auto result = saveConfigFile(*path, draft);
                 if (!result.ok()) message(configFileText(result));
             }
+            const auto personalizationPath = san9::executableFile(L"San9PKHardCheat.txt");
+            const auto personalizationResult = saveConfigFile(personalizationPath, personalizationDraft);
+            if (!personalizationResult.ok()) message(configFileText(personalizationResult));
         }
         else if (id == IDC_PERSON_LIST && event == ui::Event::Selection)
         {
