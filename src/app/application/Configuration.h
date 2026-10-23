@@ -29,6 +29,7 @@ struct ConfigurationSources
     ConfigurationSource cities = ConfigurationSource::Defaults;
     ConfigurationSource skills = ConfigurationSource::Defaults;
     ConfigurationSource formations = ConfigurationSource::Defaults;
+    ConfigurationSource personalization = ConfigurationSource::Defaults;
 };
 struct Configuration
 {

@@ -44,6 +44,9 @@ std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &direc
     load(configuration_.cities, sources.cities, Cities, L"San9PKHardCity.txt");
     load(configuration_.skills, sources.skills, Skills, L"San9PKHardSkill.txt");
     load(configuration_.formations, sources.formations, Formations, L"San9PKHardArray.txt");
+    // Personalization is optional: a missing file keeps the all-zero defaults.
+    if (std::filesystem::exists(directory / L"San9PKHardCheat.txt"))
+        load(configuration_.personalization, sources.personalization, Personalization, L"San9PKHardCheat.txt");
     confirmationPending_ = true;
     stageConfiguration();
     return errors;

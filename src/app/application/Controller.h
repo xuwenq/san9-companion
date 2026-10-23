@@ -54,7 +54,7 @@ class Controller final
     bool forces(std::vector<PlayerForce2026> &value);
   private:
     friend struct ControllerTestAccess;
-    enum InputGroup : unsigned { Parameters = 1, Persons = 2, Cities = 4, Skills = 8, Formations = 16, Speed = 32, All = 63 };
+    enum InputGroup : unsigned { Parameters = 1, Persons = 2, Cities = 4, Skills = 8, Formations = 16, Speed = 32, Personalization = 64, All = 127 };
     Runtime2026 runtime_;
     Configuration configuration_;
     unsigned queued_ = 0;

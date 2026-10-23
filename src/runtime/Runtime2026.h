@@ -156,6 +156,9 @@ private:
     void applyCultivate();
     void applyProficiencyCap();
     void applyOfficerPersonalization();
+    void installPerOfficerHook(HANDLE process, const std::array<std::uint8_t, 800>& values,
+                               DWORD hookAddress, const BYTE* original, size_t originalSize,
+                               const BYTE* code, size_t codeSize, size_t arrayAddrOffset);
     void modifyBranches(ModifyReason2026 reason);
     bool connectGame(HWND window);
     void animateConnectedStatus();

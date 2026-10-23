@@ -39,6 +39,7 @@
     <ClCompile Include="..\src\runtime\RuntimeZone2026.cpp" />
     <ClCompile Include="..\src\runtime\GameText.cpp" />
     <ClCompile Include="..\src\runtime\GameSnapshots2026.cpp" />
+    <ClCompile Include="..\src\runtime\OfficerPersonalization2026.cpp" />
     <ClCompile Include="..\src\model\ParameterConfig.cpp" />
     <ClCompile Include="..\src\model\CityConfig.cpp" />
     <ClCompile Include="..\src\model\SkillConfig.cpp" />
