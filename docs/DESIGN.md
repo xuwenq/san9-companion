@@ -64,6 +64,7 @@ San9 Companion 是一个 Win32 x86 修改器，通过 `WriteProcessMemory` / 注
 | 熟练度上限 | `0x406A74`/`0x406A7F` | clamp `0x3E8`→`0xFFFF` | ✅ |
 | 兵法发动率 | `0x4FEB95`（`kakuritsu` 调用） | hook 覆盖 chance | ✅ |
 | 兵法发动间隔 | `0x4FF08D`（`idiv` 之后） | hook 覆盖 interval | ✅ |
+| 兵法威力一定加倍(出动画) | `0x506035`（10% 会心 `kakuritsu`） | hook 命中则概率改 100 | ✅ |
 | 兵法威力系数 | `0x43EF44` | hook 点拿不到武将指针 | ⏸ 暂缓 |
 
 - 发动率注入：`applyOfficerPersonalization()` 分配游戏内存写发动率数组+辅助代码，hook `0x4FEB95`，按武将 ID `(esi-0x1258EE0)/0x128` 查数组覆盖 chance
