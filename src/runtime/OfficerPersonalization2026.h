@@ -15,6 +15,8 @@ struct OfficerPersonalization2026 {
     std::array<std::uint8_t, Count> activationPercent{};
     // 发动间隔 (旬): 0 = 不修改, 1..30 = 强制最小间隔.
     std::array<std::uint8_t, Count> interval{};
+    // 兵法威力一定加倍(出动画): 0 = 不修改, 1 = 强制会心.
+    std::array<std::uint8_t, Count> criticalHit{};
 
     san9::PackedReadResult read(std::istream &input);
     bool write(std::ostream &output) const;

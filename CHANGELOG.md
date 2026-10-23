@@ -18,6 +18,7 @@
 - 需求 4（兵法发动间隔）：在 `applyOfficerPersonalization` 中 hook `0x4FF08D`（发动间隔函数的 `idiv` 之后），按武将 ID 用配置值覆盖发动间隔。
 - 需求 4（持久化）：`OfficerPersonalization2026` 增加 `read/write`，配置文件 `San9PKHardCheat.txt`（每行一个整数，共 800×3 行），缺失则用全 0 默认值；新增 `docs/DESIGN.md` 设计文档。
 - 需求 4（UI）：在「武将配置」页新增「威力系数/发动率/发动间隔」三个数值框，并接入 `commitPersonalization` 与 `San9PKHardCheat.txt` 保存。
+- 需求 4（兵法威力一定加倍·出动画）：`OfficerPersonalization2026` 增加 `criticalHit`（0/1），hook `0x506035` 的 10% 会心 `kakuritsu`，命中则把概率改为 100，实现强制会心。
 
 ### 待办
 

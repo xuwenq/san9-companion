@@ -355,6 +355,7 @@ class PersonPage final : public ui::Dialog
         number(IDC_POWER_COEF, personalizationDraft.powerPercent[index]);
         number(IDC_ACTIVATION_RATE, personalizationDraft.activationPercent[index]);
         number(IDC_ACTIVATION_INTERVAL, personalizationDraft.interval[index]);
+        number(IDC_CRITICAL_HIT, personalizationDraft.criticalHit[index]);
         loading = false;
     }
     bool savePerson()
@@ -398,7 +399,8 @@ class PersonPage final : public ui::Dialog
         return ui::saveNumbers(*this, {
             ui::bind(IDC_POWER_COEF, 0, 250, personalizationDraft.powerPercent[index]),
             ui::bind(IDC_ACTIVATION_RATE, 0, 100, personalizationDraft.activationPercent[index]),
-            ui::bind(IDC_ACTIVATION_INTERVAL, 0, 30, personalizationDraft.interval[index])});
+            ui::bind(IDC_ACTIVATION_INTERVAL, 0, 30, personalizationDraft.interval[index]),
+            ui::bind(IDC_CRITICAL_HIT, 0, 1, personalizationDraft.criticalHit[index])});
     }
     bool save()
     {

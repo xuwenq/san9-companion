@@ -1135,19 +1135,20 @@ void personalizationConfigTest() {
         return true;
     };
     check(allZero(),"personalization defaults are all zero");
-    config.powerPercent[0]=120;config.activationPercent[5]=50;config.interval[799]=9;
+    config.powerPercent[0]=120;config.activationPercent[5]=50;config.interval[799]=9;config.criticalHit[7]=1;
     std::ostringstream output;check(config.write(output),"personalization save");
     OfficerPersonalization2026 copy;std::istringstream input(output.str());
     check(copy.read(input).error==san9::PackedReadError::none,"personalization round trip");
-    check(copy.powerPercent[0]==120 && copy.activationPercent[5]==50 && copy.interval[799]==9,
+    check(copy.powerPercent[0]==120 && copy.activationPercent[5]==50 && copy.interval[799]==9 && copy.criticalHit[7]==1,
           "personalization round-trip values");
     for(const auto& invalid:std::vector<std::string>{
-        "251\n", "0\n101\n", "0\n0\n31\n", "0\n0\n"}) {
+        "251\n", "0\n101\n", "0\n0\n31\n", "0\n0\n0\n2\n", "0\n0\n"}) {
         std::istringstream bad(invalid);
         OfficerPersonalization2026 before=config;
         check(config.read(bad).error!=san9::PackedReadError::none,"invalid personalization rejected");
         check(before.powerPercent==config.powerPercent && before.activationPercent==config.activationPercent
-            && before.interval==config.interval,"invalid personalization never partially commits");
+            && before.interval==config.interval && before.criticalHit==config.criticalHit,
+            "invalid personalization never partially commits");
     }
     std::puts("Personalization format, invalid input and round-trip checks passed.");
 }

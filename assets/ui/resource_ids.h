@@ -226,6 +226,7 @@
 #define IDC_POWER_COEF                 1211
 #define IDC_ACTIVATION_RATE             1212
 #define IDC_ACTIVATION_INTERVAL         1213
+#define IDC_CRITICAL_HIT                1214
 #define IDM_PLAYER_FORCE_START          32771
 #define IDM_PLAYER_FORCE_END            32820
 

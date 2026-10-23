@@ -1,0 +1,59 @@
+0x506020  00 00                add     byte ptr [eax], al
+0x506022  00 8b 8e 80 00 00    add     byte ptr [ebx + 0x808e], cl
+0x506028  00 f6                add     dh, dh
+0x50602A  41                   inc     ecx
+0x50602B  20 01                and     byte ptr [ecx], al
+0x50602D  74 4b                je      0x50607a
+0x50602F  6a 01                push    1
+0x506031  6a 0b                push    0xb
+0x506033  6a 0a                push    0xa
+0x506035  ff 15 f0 f2 5f 00    call    dword ptr [0x5ff2f0] <== 10% kakuritsu
+0x50603B  83 c4 0c             add     esp, 0xc
+0x50603E  85 c0                test    eax, eax
+0x506040  0f 84 ef 03 00 00    je      0x506435
+0x506046  8b 8e 80 00 00 00    mov     ecx, dword ptr [esi + 0x80]
+0x50604C  8b 11                mov     edx, dword ptr [ecx]
+0x50604E  ff 92 bc 00 00 00    call    dword ptr [edx + 0xbc]
+0x506054  8b 88 98 00 00 00    mov     ecx, dword ptr [eax + 0x98]
+0x50605A  85 c9                test    ecx, ecx
+0x50605C  0f 8f d3 03 00 00    jg      0x506435
+0x506062  50                   push    eax
+0x506063  8d 4e 34             lea     ecx, [esi + 0x34]
+0x506066  e8 05 8f f6 ff       call    0x46ef70
+0x50606B  c7 86 90 00 00 00 e9 03 00 00 mov     dword ptr [esi + 0x90], 0x3e9
+0x506075  e9 68 04 00 00       jmp     0x5064e2
+0x50607A  8b c8                mov     ecx, eax
+0x50607C  e8 3f 29 f4 ff       call    0x4489c0
+0x506081  85 c0                test    eax, eax
+0x506083  0f 84 cb 00 00 00    je      0x506154
+0x506089  8b 46 7c             mov     eax, dword ptr [esi + 0x7c]
+0x50608C  85 c0                test    eax, eax
+0x50608E  0f 85 c0 00 00 00    jne     0x506154
+0x506094  8d 4c 24 70          lea     ecx, [esp + 0x70]
+0x506098  c7 46 7c 01 00 00 00 mov     dword ptr [esi + 0x7c], 1
+0x50609F  e8 4c ad f6 ff       call    0x470df0
+0x5060A4  8d 4c 24 4c          lea     ecx, [esp + 0x4c]
+0x5060A8  c7 84 24 a4 00 00 00 00 00 00 00 mov     dword ptr [esp + 0xa4], 0
+0x5060B3  e8 38 ad f6 ff       call    0x470df0
+0x5060B8  8b 8e 80 00 00 00    mov     ecx, dword ptr [esi + 0x80]
+0x5060BE  8b 01                mov     eax, dword ptr [ecx]
+0x5060C0  8d 54 24 70          lea     edx, [esp + 0x70]
+0x5060C4  52                   push    edx
+0x5060C5  c6 84 24 a8 00 00 00 01 mov     byte ptr [esp + 0xa8], 1
+0x5060CD  ff 50 7c             call    dword ptr [eax + 0x7c]
+0x5060D0  6a 00                push    0
+0x5060D2  68 40 e6 4f 00       push    0x4fe640
+0x5060D7  8d 44 24 78          lea     eax, [esp + 0x78]
+0x5060DB  50                   push    eax
+0x5060DC  8d 4c 24 58          lea     ecx, [esp + 0x58]
+0x5060E0  e8 db 92 f6 ff       call    0x46f3c0
+0x5060E5  8b 44 24 58          mov     eax, dword ptr [esp + 0x58]
+0x5060E9  85 c0                test    eax, eax
+0x5060EB  74 3d                je      0x50612a
+0x5060ED  6a 01                push    1
+0x5060EF  6a 0b                push    0xb
+0x5060F1  6a 0a                push    0xa
+0x5060F3  ff 15 f0 f2 5f 00    call    dword ptr [0x5ff2f0]
+0x5060F9  83 c4 0c             add     esp, 0xc
+0x5060FC  85 c0                test    eax, eax
+0x5060FE  74 2a                je      0x50612a
