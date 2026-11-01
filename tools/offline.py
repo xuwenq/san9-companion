@@ -15,7 +15,7 @@ class PatchImage:
         self.root = Path(root)
         self.data = bytearray((self.root / 'generated/companion_data.bin').read_bytes())
         self.relocations = json.loads((self.root / 'generated/relocations.json').read_text(encoding='utf-8'))
-        self.object = bytearray(7692)
+        self.object = bytearray(7844)
         for entry in self.relocations:
             if entry['kind'] == 'object_field':
                 struct.pack_into('<I', self.object, entry['offset'], entry['initial_value'])

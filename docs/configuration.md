@@ -5,7 +5,7 @@
 | `ParameterConfig` | `San9PKHardPara.txt` | 88 项参数，34 行 |
 | `PersonConfig` | `San9PKHardPerson.txt` | 800 个武将、116 个亲密度记录及经验上限，917 行 |
 | `CityConfig` | `San9PKHardCity.txt` | 50 个都市、关系和攻城天数，250 行 |
-| `SkillConfig` | `San9PKHardSkill.txt` | 39 项兵法，39 行 |
+| `SkillConfig` | `San9PKHardSkill.txt` | 41 项兵法，41 行 |
 | `FormationConfig` | `San9PKHardArray.txt` | 27 项阵型，54 行 |
 
 文件格式、范围和字节编码以 `src/model/` 为准。读取完整文件并校验成功后才提交；缺行、额外内容、整数溢出或字段越界都保留原配置。加载失败会报告缺失文件、打开失败、整数格式、溢出、字段范围、缺行或多余数据；有数据位置时显示实际行号。参数诊断同时保留对应字段编号供应用层使用。默认文件位于 `assets/config/`，构建复制到 EXE 目录。偏好文件 `San9PKHardSettings.ini` 也按 EXE 目录定位，不依赖启动工作目录。

@@ -22,6 +22,6 @@ public:
     const std::vector<std::uint8_t>& data() const { return data_; }
 private:
     std::vector<std::uint8_t> data_;
-    std::array<std::uint8_t, 7692> object_{};
+    std::array<std::uint8_t, 7844> object_{};
 };
 } // namespace san9

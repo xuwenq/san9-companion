@@ -6,7 +6,6 @@ bool validFriendship(const std::array<std::uint16_t,3>& row) {
 }
 }
 bool PersonConfig::valid() const {
-    if(maxExperience<1200 || maxExperience>3000) return false;
     for(auto value:levels) if(value>0x3FFFF) return false;
     for(const auto& row:friendships) if(!validFriendship(row)) return false;
     return true;
@@ -24,33 +23,29 @@ PersonConfig::FriendshipBytes PersonConfig::encodeFriendships() const {
     }
     return bytes;
 }
-void PersonConfig::decode(const LevelBytes& l,const FriendshipBytes& f,std::uint16_t maximum) {
+void PersonConfig::decode(const LevelBytes& l,const FriendshipBytes& f) {
     for(size_t i=0;i<Count;++i) {
         levels.at(i)=0;
         for(size_t k=0;k<4;++k) levels.at(i)|=std::uint32_t(l[i*4+k])<<(k*8);
     }
     for(size_t i=0;i<FriendshipCount;++i) for(size_t k=0;k<3;++k)
         friendships.at(i)[k]=f[i*6+k*2]|(std::uint16_t(f[i*6+k*2+1])<<8);
-    maxExperience=maximum;
 }
 PackedReadResult PersonConfig::read(std::istream& input) {
     PersonConfig candidate;
-    for(size_t i=0;i<Count+FriendshipCount+1;++i) {
+    for(size_t i=0;i<Count+FriendshipCount;++i) {
         std::uint32_t value=0;const auto error=packed::number(input,value);
         if(error!=PackedReadError::none) return {error,i+1};
         if(i<Count) {
             if(value>0x3FFFF) return {PackedReadError::outOfRange,i+1};
             candidate.levels.at(i)=value;
-        } else if(i<Count+FriendshipCount) {
+        } else {
             auto& row=candidate.friendships.at(i-Count);
             row={static_cast<std::uint16_t>(value&0x3FF),static_cast<std::uint16_t>((value>>10)&0x3FF),static_cast<std::uint16_t>((value>>20)&0x3F)};
             if(value>0x3FFFFFF || !validFriendship(row)) return {PackedReadError::outOfRange,i+1};
-        } else {
-            if(value<1200 || value>3000) return {PackedReadError::outOfRange,i+1};
-            candidate.maxExperience=static_cast<std::uint16_t>(value);
         }
     }
-    const auto tail = packed::finish(input, Count+FriendshipCount+1);
+    const auto tail = packed::finish(input, Count+FriendshipCount);
     if (tail.error != PackedReadError::none) return tail;
     *this=candidate;return {};
 }
@@ -58,6 +53,6 @@ bool PersonConfig::write(std::ostream& output) const {
     if(!valid()) return false;
     for(auto value:levels) output<<value<<'\n';
     for(const auto& row:friendships) output<<(std::uint32_t(row[0])|(std::uint32_t(row[1])<<10)|(std::uint32_t(row[2])<<20))<<'\n';
-    output<<maxExperience<<'\n';output.flush();return bool(output);
+    output.flush();return bool(output);
 }
 }

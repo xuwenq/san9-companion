@@ -20,7 +20,13 @@ if ($OfflineTests) {
 }
 if ($UiSmoke) {
     $companionPath = Join-Path $projectRoot "build\app\$Configuration\San9Companion.exe"
-    $smokeProcess = Start-Process -FilePath $companionPath -ArgumentList '--ui-smoke' -WindowStyle Hidden -Wait -PassThru
+    # A bounded wait: a smoke run that never finishes would otherwise hang the
+    # build forever, and the cause is invisible from the build output.
+    $smokeProcess = Start-Process -FilePath $companionPath -ArgumentList '--ui-smoke' -WindowStyle Hidden -PassThru
+    if (-not $smokeProcess.WaitForExit(120000)) {
+        Stop-Process -Id $smokeProcess.Id -Force
+        throw "Native GUI smoke checks timed out after 120 seconds"
+    }
     if ($smokeProcess.ExitCode -ne 0) { throw "Native GUI smoke checks failed: $($smokeProcess.ExitCode)" }
     Write-Output 'Hidden Win32 dialogs, control bindings and draft isolation passed; game polling and preference writes disabled.'
 }

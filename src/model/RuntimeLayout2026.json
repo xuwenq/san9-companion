@@ -1,5 +1,5 @@
 {
-  "state_size": 7692,
+  "state_size": 7844,
   "configuration": [
     {
       "name": "PersonLevels",
@@ -46,20 +46,20 @@
     {
       "name": "SkillEntries",
       "offset": 4838,
-      "size": 156,
-      "evidence": "0x419E70"
+      "size": 164,
+      "evidence": "0x419E70 (39->41 rows; game table 0x453720 bounds 0x29)"
     },
     {
       "name": "FormationFlags",
-      "offset": 4994,
+      "offset": 7624,
       "size": 1,
-      "evidence": "0x419FB0 / 0x409E10"
+      "evidence": "0x419FB0 / 0x409E10 (relocated: SkillEntries grew 156->164)"
     },
     {
       "name": "FormationEntries",
-      "offset": 4996,
+      "offset": 7625,
       "size": 216,
-      "evidence": "0x419FB0"
+      "evidence": "0x419FB0 (relocated: SkillEntries grew 156->164)"
     }
   ],
   "lifecycle": [

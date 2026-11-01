@@ -1,7 +1,13 @@
 #include "Runtime2026.h"
 #include "../model/PatchImage.h"
+#include "AppPaths.h"
 #include <algorithm>
 #include <cstring>
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
 // Fail the build if model encoding and the recovered layout ever drift.
 static_assert(san9::PersonConfig::Count*4 == san9::layout2026::PersonLevelsSize);
@@ -12,6 +18,132 @@ static_assert(san9::FormationConfig::Bytes{}.size() == san9::layout2026::Formati
 static_assert(sizeof(WORD) == san9::layout2026::MaxExperienceSize);
 static_assert(sizeof(DWORD) == san9::layout2026::CityAutomaticSize && sizeof(DWORD) == san9::layout2026::CityPendingSize);
 static_assert(sizeof(BYTE) == san9::layout2026::SkillFlagsSize && sizeof(BYTE) == san9::layout2026::FormationFlagsSize);
+
+namespace {
+// The diagnostic log lives next to the executable. It is written through a single
+// persistent stream: opening and closing a file per write dominated the cost of
+// small writes, and an unbounded log grew to hundreds of megabytes during a
+// full offline sweep. The stream is truncated once it exceeds the cap.
+constexpr std::uintmax_t RuntimeLogLimit = 8u * 1024u * 1024u;
+
+struct RuntimeLog {
+    std::ofstream stream;
+    std::uintmax_t written = 0;
+    bool disabled = false;
+};
+
+RuntimeLog& runtimeLog() {
+    static RuntimeLog log;
+    return log;
+}
+
+// Detailed per-write tracing. It produces hundreds of thousands of lines and
+// buries the failure records that matter, so it stays off unless the user
+// explicitly asks for it. Two ways to ask, in decreasing precedence:
+//   * the settings page, which turns it on for the running session
+//   * command line / environment: San9Companion.exe --log-writes, SAN9_LOG_WRITES=1
+bool runtimeLogTraceForced = false;
+
+bool traceWritesRequested() {
+    if (runtimeLogTraceForced) return true;
+    if (GetCommandLineW()) {
+        // Exact argument match: a substring search would also fire for
+        // "--log-writes-off" and similar near-misses.
+        std::wstring text(GetCommandLineW());
+        size_t pos = 0;
+        while (pos < text.size())
+        {
+            while (pos < text.size() && (text[pos] == L' ' || text[pos] == L'\t')) ++pos;
+            const size_t start = pos;
+            while (pos < text.size() && text[pos] != L' ' && text[pos] != L'\t') ++pos;
+            if (pos == start) break;
+            if (text.compare(start, pos - start, L"--log-writes") == 0) return true;
+        }
+    }
+    char value[8]{};
+    const DWORD length = GetEnvironmentVariableA("SAN9_LOG_WRITES", value, sizeof(value));
+    return length > 0 && value[0] != '0';
+}
+
+std::string hexBytes(const BYTE* data, size_t size) {
+    std::ostringstream out;
+    out << std::hex << std::setfill('0');
+    for (size_t i = 0; i < size; ++i)
+        out << std::setw(2) << static_cast<unsigned>(data[i]) << ' ';
+    return out.str();
+}
+
+std::string hexDword(DWORD value) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setw(8) << std::setfill('0') << value;
+    return out.str();
+}
+}
+
+void closeRuntimeLog() {
+    auto& log = runtimeLog();
+    if (log.stream.is_open()) log.stream.close();
+    log.written = 0;
+    log.disabled = false;
+}
+
+void appendRuntimeLog(const char* message, std::size_t length) {
+    try {
+        if (!message) return;
+        auto& log = runtimeLog();
+        if (log.disabled) return;
+        if (!log.stream.is_open()) {
+            const auto path = san9::executableFile(L"San9Companion.log");
+            std::error_code error;
+            const auto existing = std::filesystem::file_size(path, error);
+            if (!error && existing >= RuntimeLogLimit) {
+                // Start a fresh file instead of appending to an oversized one.
+                std::filesystem::remove(path, error);
+            }
+            log.stream.open(path, std::ios::app);
+            if (!log.stream) { log.disabled = true; return; }
+            log.written = error ? 0u : static_cast<std::uintmax_t>(existing);
+        }
+        const auto now = std::chrono::system_clock::now();
+        const auto time = std::chrono::system_clock::to_time_t(now);
+        std::tm tm{};
+        localtime_s(&tm, &time);
+        char stamp[32];
+        std::snprintf(stamp,sizeof(stamp),"%04d-%02d-%02d %02d:%02d:%02d  ",
+            tm.tm_year+1900,tm.tm_mon+1,tm.tm_mday,tm.tm_hour,tm.tm_min,tm.tm_sec);
+        log.stream << stamp;
+        log.stream.write(message, static_cast<std::streamsize>(length));
+        log.stream.put('\n');
+        log.written += length + 1;
+        if (log.written >= RuntimeLogLimit) {
+            // The cap is reached: stop writing instead of growing without bound.
+            log.stream.close();
+            log.written = 0;
+            log.disabled = true;
+        }
+    } catch (...) {
+    }
+}
+
+void appendRuntimeLog(const char* message) {
+    appendRuntimeLog(message, message ? std::strlen(message) : 0u);
+    try {
+        auto& log = runtimeLog();
+        if (log.stream.is_open()) log.stream.flush();
+    } catch (...) {
+    }
+}
+
+void appendRuntimeLogTrace(const char* message, std::size_t length) {
+    if (!traceWritesRequested()) return;
+    appendRuntimeLog(message, length);
+}
+
+void setRuntimeLogTrace(bool enabled) {
+    runtimeLogTraceForced = enabled;
+    appendRuntimeLog(enabled ? "detailed write tracing enabled"
+                             : "detailed write tracing disabled");
+}
 
 void Runtime2026::restoreSessionBaseline() {
     speedAllocation_=savedSpeedAllocation_=0;
@@ -219,35 +351,33 @@ void Runtime2026::applyGrowthBoost() {
     }
 
     const DWORD multiplier = growthBoost_.multiplier;
-    constexpr size_t codeSize = 51;
-    const size_t totalSize = bitset.size() + sizeof(DWORD) + codeSize;
+    constexpr size_t codeSize = 40;
+    const size_t totalSize = bitset.size() + codeSize;
     const auto region = allocateMemory(process, nullptr, totalSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
     if (!region) return;
     const DWORD bitsetAddr = reinterpret_cast<DWORD>(region);
-    const DWORD multiplierAddr = bitsetAddr + static_cast<DWORD>(bitset.size());
-    const DWORD codeAddr = multiplierAddr + sizeof(DWORD);
+    const DWORD codeAddr = bitsetAddr + static_cast<DWORD>(bitset.size());
 
     writePatch(reinterpret_cast<LPVOID>(bitsetAddr), bitset.data(), bitset.size());
-    writePatch(reinterpret_cast<LPVOID>(multiplierAddr), &multiplier, sizeof(multiplier));
 
-    // Growth-multiplier code block. Entry: EAX = growth probability, ESI = officer.
-    // It computes officer id = (ESI - 0x1258EE0) / 0x128, checks the bitset and
-    // multiplies the probability, then stores it and jumps to kakuritsu.
+    // Growth-multiplier code block. Entry: EAX = growth probability, ESI = officer
+    // (CPersonData). Officer id = word[esi+4] (the person-table index; bounds < 0x320).
+    // If the officer is in the bitset, multiply the probability, then write it to
+    // [esp+4] (the argument slot of the original call) and tail-jump into the API.
     std::array<BYTE, codeSize> code = {
-        0x50, 0x8B, 0xC6, 0x2D, 0xE0, 0x8E, 0x58, 0x12, // push eax; mov eax,esi; sub eax,0x1258EE0
-        0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1, // xor edx,edx; mov ecx,0x128; div ecx
-        0xB9, 0x00, 0x00, 0x00, 0x00,                   // mov ecx, bitsetAddr
-        0x80, 0x3C, 0x01, 0x00,                         // cmp byte [ecx+eax], 0
-        0x74, 0x0C,                                     // je not_in_list
-        0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,             // mov ecx, [multiplierAddr]
-        0x58, 0x0F, 0xAF, 0xC1,                         // pop eax; imul eax,ecx
-        0xEB, 0x01,                                     // jmp store
-        0x58,                                           // not_in_list: pop eax
-        0x89, 0x44, 0x24, 0x04,                         // store: mov [esp+4], eax
-        0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00              // jmp [0x5FF2F0]
+        0x89, 0xC1,                   // mov ecx, eax
+        0x0F, 0xB7, 0x46, 0x04,       // movzx eax, word [esi+4]
+        0x3D, 0x20, 0x03, 0x00, 0x00, // cmp eax, 0x320
+        0x73, 0x11,                   // jae skip
+        0xBA, 0x00, 0x00, 0x00, 0x00, // mov edx, bitsetAddr
+        0x80, 0x3C, 0x02, 0x00,       // cmp byte [edx+eax], 0
+        0x74, 0x06,                   // je skip
+        0x69, 0xC9, 0x00, 0x00, 0x00, 0x00, // imul ecx, ecx, multiplier
+        0x89, 0x4C, 0x24, 0x04,       // skip: mov [esp+4], ecx
+        0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00 // jmp [0x5FF2F0]
     };
-    std::memcpy(code.data() + 0x12, &bitsetAddr, 4);
-    std::memcpy(code.data() + 0x1E, &multiplierAddr, 4);
+    std::memcpy(code.data() + 0x0E, &bitsetAddr, 4);
+    std::memcpy(code.data() + 0x1A, &multiplier, 4);
     writePatch(reinterpret_cast<LPVOID>(codeAddr), code.data(), code.size());
 
     // Redirect the tail to the growth-multiplier code block.
@@ -255,6 +385,16 @@ void Runtime2026::applyGrowthBoost() {
     const int rel32 = static_cast<int>(codeAddr - (codeBlockTail + 5));
     std::memcpy(jump + 1, &rel32, 4);
     writePatch(reinterpret_cast<LPVOID>(codeBlockTail), jump, sizeof(jump));
+
+    {
+        size_t officers = 0;
+        for (auto v : bitset) if (v) ++officers;
+        std::ostringstream line;
+        line << "growth boost installed: officers=" << officers
+             << " multiplier=" << multiplier
+             << " codeAddr=0x" << std::hex << std::setw(8) << std::setfill('0') << codeAddr;
+        appendRuntimeLog(line.str().c_str());
+    }
 }
 
 void Runtime2026::applyCultivate() {
@@ -263,77 +403,260 @@ void Runtime2026::applyCultivate() {
     const BYTE duration = enabled
         ? static_cast<BYTE>((std::min)((std::max)(cultivate_.durationRounds, 3u), 12u))
         : static_cast<BYTE>(9);
-    const BYTE activate = enabled ? 1 : 0;
-    // 训练回合/培养时长 (0x14FA656) and the first 小兵 activation flag (0x6613EE).
+    // 培养时长(旬). The address below is an unverified guess, not a reverse
+    // engineered one: it lives in the .data BSS region, has zero references
+    // inside the PE and no pointer in .data aims at it.
+    //   ⚠️ 未验证地址：PE 内零引用、无指针指向、位于 .data BSS；
+    //     若实机再崩，先删这行
     writePatch(reinterpret_cast<LPVOID>(0x14FA656u), &duration, 1u);
-    writePatch(reinterpret_cast<LPVOID>(0x6613EEu), &activate, 1u);
+    // This function no longer writes a 小兵 activation flag.  The former write
+    // to 0x6613EE was the root cause of crash #4: 0x6613EE is byte index 2 of
+    // the id dword at 0x6613EC (value 0x000003E8, id 1000), so writing 1 there
+    // turned the id into 0x000103E8, the lookup at 0x5B7050 then failed and
+    // getflag at 0x5B72F0 dereferenced a null entry.
+    // 强制小兵培养 is implemented by RuntimeInjection2026.cpp:1170-1172, which
+    // writes 0x40CAEF / 0x40BF25 = 0x32 / 0 exactly like the original tool.
 }
 
 void Runtime2026::applyProficiencyCap() {
-    // Raise the game's proficiency clamp from 1000 to 65535 (SanIXPKCheat's max).
-    // 0x406A70 is min(value, 1000): "cmp eax,0x3E8" and "mov eax,0x3E8".
-    const DWORD cap = 0xFFFF;
-    writePatch(reinterpret_cast<LPVOID>(0x406A75u), &cap, 4u);
-    writePatch(reinterpret_cast<LPVOID>(0x406A80u), &cap, 4u);
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
+
+    // 熟练度上限函数位于分配区内偏移 0x2190（原工具固定基址 0xA0000+0x2190）。
+    const DWORD capAddr = field<DWORD>(san9::layout2026::AllocationBase) + 0x2190u;
+
+    // 每武将每系熟练度上限 (uint16[800][9]) 扁平化为字节。
+    std::array<std::uint8_t, 800 * 9 * 2> capFlat{};
+    bool any = false;
+    for (size_t o = 0; o < 800; ++o)
+        for (size_t s = 0; s < 9; ++s) {
+            const std::uint16_t v = personalization_.proficiencyCap[o][s];
+            capFlat[(o * 9 + s) * 2] = static_cast<std::uint8_t>(v);
+            capFlat[(o * 9 + s) * 2 + 1] = static_cast<std::uint8_t>(v >> 8);
+            if (v != 0 && v != OfficerPersonalization2026::DefaultCap) any = true;
+        }
+    if (!any) {
+        // 无自定义上限：写回原游戏逻辑（含重定位后的熟练度表访问），避免 uploadInjectionPayloads 晚于本函数覆盖。
+        writePatch(reinterpret_cast<LPVOID>(capAddr), &global<DWORD>(0x4256B8), 0x5Du);
+        return;
+    }
+
+    // 替换熟练度上限逻辑：保留原计算，按 (武将ID, 系) 查表覆盖上限。
+    static const BYTE code[93] = {
+        0x99,0xB9,0xFA,0x00,0x00,0x00,0xF7,0xF1,0x83,0xE8,0x04,0xF7,0xD8,0x85,0xC0,0x7F,0x04,0x33,0xC0,0xB0,0x01,0x3C,0x04,0x7E,0x02,0xB0,0x04,0x0F,0xAF,0x44,0x24,0x08,0x99,0xB1,0x03,0xF7,0xF1,0x89,0x44,0x24,0x08,
+        0x0F,0xB7,0x46,0x04,0x3D,0x20,0x03,0x00,0x00,0x7D,0x17,0x6B,0xC0,0x09,0x03,0xC7,0x0F,0xB7,0x04,0x45,0x00,0x00,0x00,0x00,0x66,0x85,0xC0,0x74,0x05,0x66,0x89,0x44,0x24,0x0C,
+        0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,0x90,
+        0xFF,0x25,0x0C,0xF3,0x5F,0x00};
+
+    const size_t capSize = capFlat.size();
+    const auto region = allocateMemory(process, nullptr, capSize, MEM_COMMIT, PAGE_READWRITE);
+    if (!region) return;
+    const DWORD capArr = reinterpret_cast<DWORD>(region);
+    writePatch(reinterpret_cast<LPVOID>(capArr), capFlat.data(), capFlat.size());
+
+    BYTE bytes[sizeof(code)];
+    std::memcpy(bytes, code, sizeof(code));
+    std::memcpy(bytes + 0x3D, &capArr, 4);  // movzx eax, word [capArr + eax*2] 的 disp32
+    writePatch(reinterpret_cast<LPVOID>(capAddr), bytes, sizeof(bytes));
 }
 
 void Runtime2026::applyOfficerPersonalization() {
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
     if (!process) return;
 
-    // 发动率：hook 0x4FEB95 的 kakuritsu，按武将覆盖发动概率。
-    const BYTE rateOriginal[6] = {0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00};
-    const BYTE rateCode[42] = {
-        0x50, 0x8B, 0xC6, 0x2D, 0xE0, 0x8E, 0x58, 0x12,
-        0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1,
-        0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
-        0x0F, 0xB6, 0x0C, 0x01, 0x85, 0xC9, 0x74, 0x04, 0x89, 0x4C, 0x24, 0x04,
-        0x58, 0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00
+    // 提升兵法发动机会把握概率：hook 0x4FEB90（`mov esi,0xA`，esi 此时仍是单位对象）。
+    // stub 先保存单位到 callee-saved ebx，重放 `mov esi,0xA; call [0x5FF2F0]; add esp,0xC`，
+    // 再沿单位 +0x30 → CPersonData → word[+4] 取武将索引查 activationBoost；命中则 eax=1。
+    // 返回 0x4FEB9E（原 `test eax,eax` 之后的清栈分支）。
+    const BYTE boostOriginal[5] = {0xBE, 0x0A, 0x00, 0x00, 0x00}; // mov esi,0xA
+    const BYTE boostCode[56] = {
+        0x8B, 0xDE,                   // mov ebx, esi
+        0xBE, 0x0A, 0x00, 0x00, 0x00, // mov esi, 0xA
+        0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00, // call [0x5FF2F0]
+        0x83, 0xC4, 0x0C,             // add esp, 0xC
+        0x8B, 0x5B, 0x30,             // mov ebx, [ebx+0x30]
+        0x85, 0xDB,                   // test ebx, ebx
+        0x74, 0x1C,                   // je done
+        0x0F, 0xB7, 0x5B, 0x04,       // movzx ebx, word [ebx+4]
+        0x81, 0xFB, 0x20, 0x03, 0x00, 0x00, // cmp ebx, 0x320
+        0x73, 0x10,                   // jae done
+        0xB9, 0x00, 0x00, 0x00, 0x00, // mov ecx, activationArray
+        0x80, 0x3C, 0x19, 0x00,       // cmp byte [ecx+ebx], 0
+        0x74, 0x05,                   // je done
+        0xB8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+        0xE9, 0x00, 0x00, 0x00, 0x00  // jmp 0x4FEB9E
     };
-    installPerOfficerHook(process, personalization_.activationPercent, 0x4FEB95u,
-                          rateOriginal, sizeof(rateOriginal), rateCode, sizeof(rateCode), 0x12);
+    installPerOfficerHook(process, personalization_.activationBoost, 0x4FEB90u,
+                          boostOriginal, sizeof(boostOriginal), 0x4FEB9Eu,
+                          boostCode, sizeof(boostCode), 0x24,
+                          "activationBoost");
 
-    // 发动间隔：hook 0x4FF08D（idiv 之后），按武将覆盖间隔。
-    const BYTE intervalOriginal[8] = {0x8B, 0xCE, 0x50, 0xE8, 0xCB, 0xC6, 0xFF, 0xFF};
-    const BYTE intervalCode[48] = {
-        0x50, 0x8B, 0xC3, 0x2D, 0xE0, 0x8E, 0x58, 0x12,
-        0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1,
-        0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
-        0x0F, 0xB6, 0x0C, 0x01, 0x85, 0xC9, 0x74, 0x03, 0x89, 0x0C, 0x24,
-        0x58, 0x8B, 0xCE, 0x50, 0xE8, 0x35, 0xB7, 0x4F, 0x00,
-        0xE9, 0x65, 0xF0, 0x4F, 0x00
+    // 兵法威力一定加倍(出动画)：hook 0x50603B（`add esp,0xC; test eax,eax`）。
+    // stub 沿 [esi+0x80] → [+0x88] 链表逐节点取 CPersonData → word[+4] 查 criticalHit；
+    // 命中则 eax=1 并保留 esi（战斗单位），返回 0x506040。
+    const BYTE criticalOriginal[5] = {0x83, 0xC4, 0x0C, 0x85, 0xC0}; // add esp,0xC; test eax,eax
+    const BYTE criticalCode[84] = {
+        0x83, 0xC4, 0x0C,             // add esp, 0xC
+        0x50,                         // push eax
+        0x53,                         // push ebx
+        0x57,                         // push edi
+        0x8B, 0x86, 0x80, 0x00, 0x00, 0x00, // mov eax, [esi+0x80]
+        0x85, 0xC0,                   // test eax, eax
+        0x74, 0x3A,                   // je notfound
+        0x8B, 0x80, 0x88, 0x00, 0x00, 0x00, // mov eax, [eax+0x88]
+        0x89, 0xC7,                   // mov edi, eax
+        0x85, 0xFF,                   // loop: test edi, edi
+        0x74, 0x2E,                   // je notfound
+        0x8B, 0x47, 0x08,             // mov eax, [edi+8]
+        0x0F, 0xB7, 0x40, 0x04,       // movzx eax, word [eax+4]
+        0x3D, 0x20, 0x03, 0x00, 0x00, // cmp eax, 0x320
+        0x73, 0x1C,                   // jae next
+        0xBB, 0x00, 0x00, 0x00, 0x00, // mov ebx, criticalArray
+        0x80, 0x3C, 0x03, 0x00,       // cmp byte [ebx+eax], 0
+        0x74, 0x11,                   // je next
+        0xB8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
+        0x83, 0xC4, 0x04,             // found: add esp,4
+        0x5F,                         // pop edi
+        0x5B,                         // pop ebx
+        0x85, 0xC0,                   // test eax, eax
+        0xE9, 0x00, 0x00, 0x00, 0x00, // jmp 0x506040
+        0x8B, 0x3F,                   // next: mov edi, [edi]
+        0xEB, 0xCE,                   // jmp loop
+        0x58,                         // notfound: pop eax
+        0x5F,                         // pop edi
+        0x5B,                         // pop ebx
+        0x85, 0xC0,                   // test eax, eax
+        0xE9, 0x00, 0x00, 0x00, 0x00  // jmp 0x506040
     };
-    installPerOfficerHook(process, personalization_.interval, 0x4FF08Du,
-                          intervalOriginal, sizeof(intervalOriginal), intervalCode, sizeof(intervalCode), 0x12);
+    installPerOfficerHook(process, personalization_.criticalHit, 0x50603Bu,
+                          criticalOriginal, sizeof(criticalOriginal), 0x506040u,
+                          criticalCode, sizeof(criticalCode), 0x2B,
+                          "criticalHit", 0x42);
 
-    // 威力加倍(出动画)：hook 0x506035 的 10% 会心 kakuritsu，命中则把概率改为 100。
-    const BYTE criticalOriginal[6] = {0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00};
-    const BYTE criticalCode[44] = {
-        0x50, 0x8B, 0xC6, 0x2D, 0xE0, 0x8E, 0x58, 0x12,
-        0x33, 0xD2, 0xB9, 0x28, 0x01, 0x00, 0x00, 0xF7, 0xF1,
-        0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00,
-        0x80, 0x3C, 0x01, 0x00, 0x74, 0x08, 0xC7, 0x44, 0x24, 0x04, 0x64, 0x00, 0x00, 0x00,
-        0x58, 0xFF, 0x25, 0xF0, 0xF2, 0x5F, 0x00
-    };
-    installPerOfficerHook(process, personalization_.criticalHit, 0x506035u,
-                          criticalOriginal, sizeof(criticalOriginal), criticalCode, sizeof(criticalCode), 0x12);
+    // 发动间隔(天, per-skill)：hook 0x4FF08B（`idiv ecx`）。esi=CPersonData → word[+4]
+    // 取武将索引、[ebx+0x34] 取技能ID；intervalFlat 用 0xFF 标记"未自定义"。
+    // 命中则把配置天数直接写 eax（跳过 idiv），否则跑原版 idiv。
+    // 两条路径尾部都重放 `mov ecx,esi; push eax` 并跳回 0x4FF090 让原 call 0x4FB760 执行。
+    bool intervalChanged = false;
+    for (size_t o = 0; o < 800 && !intervalChanged; ++o)
+        for (size_t s = 0; s < 41; ++s)
+            if (personalization_.interval[o][s] != OfficerPersonalization2026::defaultInterval[s]) {
+                intervalChanged = true;
+                break;
+            }
+    const BYTE intervalOriginal[5] = {0xF7, 0xF9, 0x8B, 0xCE, 0x50}; // idiv ecx; mov ecx,esi; push eax
+    const LPVOID intervalHook = reinterpret_cast<LPVOID>(0x4FF08Bu);
+    if (!intervalChanged) {
+        writePatch(intervalHook, intervalOriginal, sizeof(intervalOriginal));
+        appendRuntimeLog("personalization interval: no skill changed, hook restored at 0x004FF08B");
+    } else {
+        std::array<std::uint8_t, 800 * 41> intervalFlat{};
+        for (size_t o = 0; o < 800; ++o)
+            for (size_t s = 0; s < 41; ++s) {
+                const std::uint8_t value = personalization_.interval[o][s];
+                intervalFlat[o * 41 + s] =
+                    value == OfficerPersonalization2026::defaultInterval[s] ? 0xFFu : value;
+            }
+        const BYTE intervalCode[77] = {
+            0x53,                         // push ebx
+            0x56,                         // push esi
+            0x50,                         // push eax
+            0x51,                         // push ecx
+            0x8B, 0x43, 0x34,             // mov eax, [ebx+0x34]
+            0x83, 0xE0, 0x3F,             // and eax, 0x3F
+            0x83, 0xF8, 0x29,             // cmp eax, 0x29
+            0x73, 0x2F,                   // jae not_custom
+            0x0F, 0xB7, 0x4E, 0x04,       // movzx ecx, word [esi+4]
+            0x81, 0xF9, 0x20, 0x03, 0x00, 0x00, // cmp ecx, 0x320
+            0x73, 0x23,                   // jae not_custom
+            0x6B, 0xC9, 0x29,             // imul ecx, ecx, 0x29
+            0x03, 0xC1,                   // add eax, ecx
+            0xB9, 0x00, 0x00, 0x00, 0x00, // mov ecx, intervalArray
+            0x80, 0x3C, 0x01, 0xFF,       // cmp byte [ecx+eax], 0xFF
+            0x74, 0x13,                   // je not_custom
+            0x0F, 0xB6, 0x0C, 0x01,       // movzx ecx, byte [ecx+eax]
+            0x8B, 0xC1,                   // mov eax, ecx
+            0x83, 0xC4, 0x08,             // add esp, 8
+            0x5E,                         // pop esi
+            0x5B,                         // pop ebx
+            0x8B, 0xCE,                   // mov ecx, esi
+            0x50,                         // push eax
+            0xE9, 0x00, 0x00, 0x00, 0x00, // jmp 0x4FF090
+            0x59,                         // not_custom: pop ecx
+            0x58,                         // pop eax
+            0x99,                         // cdq
+            0xF7, 0xF9,                   // idiv ecx
+            0x5E,                         // pop esi
+            0x5B,                         // pop ebx
+            0x8B, 0xCE,                   // mov ecx, esi
+            0x50,                         // push eax
+            0xE9, 0x00, 0x00, 0x00, 0x00  // jmp 0x4FF090
+        };
+        const size_t total = intervalFlat.size() + sizeof(intervalCode);
+        const auto region = allocateMemory(process, nullptr, total, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        if (region) {
+            const DWORD arr = reinterpret_cast<DWORD>(region);
+            const DWORD codeAddr = arr + static_cast<DWORD>(intervalFlat.size());
+            writePatch(reinterpret_cast<LPVOID>(arr), intervalFlat.data(), intervalFlat.size());
+            BYTE code[sizeof(intervalCode)];
+            std::memcpy(code, intervalCode, sizeof(intervalCode));
+            std::memcpy(code + 0x21, &arr, 4);           // mov ecx, intervalArray imm32
+            const int jmpRel = static_cast<int>(0x4FF090u - (codeAddr + 0x39 + 5));
+            std::memcpy(code + 0x3A, &jmpRel, 4);        // jmp 0x4FF090 (E9@0x39, rel32@0x3A)
+            const int jmpRelNc = static_cast<int>(0x4FF090u - (codeAddr + 0x48 + 5));
+            std::memcpy(code + 0x49, &jmpRelNc, 4);      // not_custom: jmp 0x4FF090 (E9@0x48, rel32@0x49)
+            writePatch(reinterpret_cast<LPVOID>(codeAddr), code, sizeof(code));
+            BYTE jump[5] = {0xE9, 0x00, 0x00, 0x00, 0x00};
+            const int rel = static_cast<int>(codeAddr - (0x4FF08Bu + 5));
+            std::memcpy(jump + 1, &rel, 4);
+            writePatch(intervalHook, jump, sizeof(jump));
+            size_t changed = 0;
+            for (size_t o = 0; o < 800; ++o)
+                for (size_t s = 0; s < 41; ++s)
+                    if (personalization_.interval[o][s] != OfficerPersonalization2026::defaultInterval[s]) ++changed;
+            std::ostringstream line;
+            line << "personalization interval: entries=" << changed
+                 << " hook=0x004FF08B codeAddr=0x" << std::hex << std::setw(8) << std::setfill('0') << codeAddr
+                 << " arr=0x" << std::setw(8) << arr
+                 << " codeSize=" << std::dec << sizeof(intervalCode)
+                 << " jmpRel=0x" << std::hex << std::setw(8) << static_cast<unsigned>(jmpRel)
+                 << " jmpRelNc=0x" << std::setw(8) << static_cast<unsigned>(jmpRelNc)
+                 << " jump@hook=" << hexBytes(jump, sizeof(jump))
+                 << " code=" << hexBytes(code, sizeof(code))
+                 << " officerIndex=word[esi+4]";
+            appendRuntimeLog(line.str().c_str());
+        }
+    }
 }
 
 void Runtime2026::installPerOfficerHook(HANDLE process, const std::array<std::uint8_t, 800>& values,
                                         DWORD hookAddress, const BYTE* original, size_t originalSize,
-                                        const BYTE* code, size_t codeSize, size_t arrayAddrOffset) {
+                                        DWORD returnAddress,
+                                        const BYTE* code, size_t codeSize, size_t arrayAddrOffset,
+                                        const char* feature, size_t extraJumpRelOffset) {
     bool any = false;
-    for (auto v : values) if (v > 0) { any = true; break; }
+    size_t officers = 0;
+    for (auto v : values) if (v > 0) { any = true; ++officers; }
 
     const LPVOID hook = reinterpret_cast<LPVOID>(hookAddress);
     if (!any) {
         writePatch(hook, original, originalSize);
+        {
+            std::ostringstream line;
+            line << "personalization " << feature << ": no officer selected, hook restored at 0x"
+                 << std::hex << std::setw(8) << std::setfill('0') << hookAddress
+                 << " original=" << hexBytes(original, originalSize);
+            appendRuntimeLog(line.str().c_str());
+        }
         return;
     }
 
     const size_t total = values.size() + codeSize;
     const auto region = allocateMemory(process, nullptr, total, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!region) return;
+    if (!region) {
+        appendRuntimeLog((std::string("personalization ") + feature + ": allocation failed").c_str());
+        return;
+    }
     const DWORD arr = reinterpret_cast<DWORD>(region);
     const DWORD codeAddr = arr + static_cast<DWORD>(values.size());
 
@@ -341,13 +664,40 @@ void Runtime2026::installPerOfficerHook(HANDLE process, const std::array<std::ui
 
     std::vector<BYTE> codeBytes(code, code + codeSize);
     std::memcpy(codeBytes.data() + arrayAddrOffset, &arr, 4);
+    // 尾部 `E9 rel32` 跳回特性自定的继续执行点（activation/critical 在 stub 内
+    // 已重放被替换指令后的逻辑，这里直接跳回 returnAddress）。
+    const int jumpRel = static_cast<int>(returnAddress - (codeAddr + static_cast<DWORD>(codeSize)));
+    std::memcpy(codeBytes.data() + codeSize - 4, &jumpRel, 4);
+    // critical 代码块在 found 分支另有一处 `E9 rel32`（E9@0x41, rel32@0x42），
+    // 同样跳回 returnAddress，需单独重定位（否则留在 0 会跳到自身后 5 字节）。
+    if (extraJumpRelOffset != SIZE_MAX) {
+        const int extraRel = static_cast<int>(returnAddress - (codeAddr + static_cast<DWORD>(extraJumpRelOffset + 4)));
+        std::memcpy(codeBytes.data() + extraJumpRelOffset, &extraRel, 4);
+    }
     writePatch(reinterpret_cast<LPVOID>(codeAddr), codeBytes.data(), codeBytes.size());
 
+    // 覆盖恰好 originalSize 字节（activation/critical 均为 5 字节 `E9 rel32`），
+    // 不会吞掉后续的 `add esp,0xC` 等原指令（B4）。
     std::vector<BYTE> jump(originalSize, 0x90);
     jump[0] = 0xE9;
     const int rel = static_cast<int>(codeAddr - (hookAddress + 5));
     std::memcpy(jump.data() + 1, &rel, 4);
     writePatch(hook, jump.data(), jump.size());
+
+    {
+        std::ostringstream line;
+        line << "personalization " << feature << ": officers=" << officers
+             << " hook=0x" << std::hex << std::setw(8) << std::setfill('0') << hookAddress
+             << " codeAddr=0x" << std::setw(8) << codeAddr
+             << " arr=0x" << std::setw(8) << arr
+             << " codeSize=" << std::dec << codeSize
+             << " arrayAddrOffset=0x" << std::hex << arrayAddrOffset
+             << " return=0x" << std::setw(8) << returnAddress
+             << " jumpRel=0x" << std::setw(8) << static_cast<unsigned>(jumpRel)
+             << " jump@hook=" << hexBytes(jump.data(), jump.size())
+             << " code=" << hexBytes(codeBytes.data(), codeBytes.size());
+        appendRuntimeLog(line.str().c_str());
+    }
 }
 
 bool Runtime2026::togglePlayerForce(unsigned index) {
@@ -386,12 +736,22 @@ bool Runtime2026::runOperation(const std::function<void()>& operation) {
         process_.state().phase = process_.state().process ? SessionPhase2026::Active : SessionPhase2026::Idle;
         process_.state().result = OperationResult2026::Committed;
     } catch (const ProcessOperationFailure2026&) {
+        {
+            std::ostringstream line;
+            line << "modify failed op=" << static_cast<int>(process_.state().failure.operation)
+                 << " target=0x" << std::hex << std::setw(8) << std::setfill('0') << process_.state().failure.target
+                 << std::dec << " requested=" << process_.state().failure.requested
+                 << " transferred=" << process_.state().failure.transferred
+                 << " error=" << process_.state().failure.systemError;
+            appendRuntimeLog(line.str().c_str());
+        }
         process_.state().phase = SessionPhase2026::RecoveryRequired;
         retryRollback();
         if (process_.state().result == OperationResult2026::RolledBack)
             setStatus(RuntimeStatusKind2026::ModificationRolledBack);
     } catch (...) {
         process_.state().failure = {RuntimeOperation2026::RuntimeException};
+        appendRuntimeLog("modify exception (unknown), rolled back");
         process_.state().phase = SessionPhase2026::RecoveryRequired;
         retryRollback();
         if (process_.state().result == OperationResult2026::RolledBack)
@@ -423,7 +783,6 @@ Runtime2026::Runtime2026(ProcessApi2026 api): process_(api), threadBarrier_(api)
     constexpr DWORD values[] = {0xA31B0,0xA4000,0xA5662,0xA5630,0xA6E00,0xA3CC0,0xA1AE0};
     for (size_t i=0; i<std::size(offsets); ++i) field<DWORD>(offsets[i]) = values[i];
     for (size_t i=0;i<san9::PersonConfig::Count;++i) field<DWORD>(san9::layout2026::PersonLevels+4*i)=0x3FEAA;
-    field<WORD>(san9::layout2026::MaxExperience)=1500;
     field<DWORD>(san9::injection2026::PersonFriendshipAddress)=0x610740;
     copyIn(san9::layout2026::PersonFriendships, pointer<BYTE>(0x42DB28), 58*6);
     std::fill_n(pointer<BYTE>(0x42DC84), 58*6, BYTE{0});
@@ -514,12 +873,11 @@ void Runtime2026::setParameters(const san9::ParameterConfig& parameters) {
 san9::PersonConfig Runtime2026::personConfig() const {
     san9::PersonConfig config;san9::PersonConfig::LevelBytes levels{};san9::PersonConfig::FriendshipBytes friendships{};
     copyOut(san9::layout2026::PersonLevels,levels.data(),levels.size());copyOut(san9::layout2026::PersonFriendships,friendships.data(),friendships.size());
-    WORD maximum=0;copyOut(san9::layout2026::MaxExperience,&maximum,sizeof(maximum));config.decode(levels,friendships,maximum);return config;
+    config.decode(levels,friendships);return config;
 }
 void Runtime2026::setPersonConfig(const san9::PersonConfig& config) {
     const auto levels=config.encodeLevels();const auto friendships=config.encodeFriendships();
     copyIn(san9::layout2026::PersonLevels,levels.data(),levels.size());copyIn(san9::layout2026::PersonFriendships,friendships.data(),friendships.size());
-    field<WORD>(san9::layout2026::MaxExperience)=config.maxExperience;
 }
 san9::FormationConfig Runtime2026::formationConfig() const {
     san9::FormationConfig config;san9::FormationConfig::Bytes bytes{};

@@ -48,27 +48,36 @@ San9 Companion 是一个 Win32 x86 修改器，通过 `WriteProcessMemory` / 注
 
 - 能力系数反转：`codeTrainBasicAbility` 内两处 `sub byte [edx],al`(`0x28,0x02`) → `add`(`0x00,0x02`)，实现「数字越大越强」
 - 培养时长可配：`Cultivate2026.durationRounds`（默认 9，范围 3~12）写入 `0x14FA656`
-- 强制小兵提拔：置 `0x6613EE`（小兵激活标志）=1（当前仅第一个槽位）
+  - ⚠️ **未验证地址**：`0x14FA656` 是我们凭猜测定的地址——PE 内零引用、无指针指向、位于 `.data` BSS 区，
+    原工具的 `recovery/evidence/global_assignments.json` 里也没有它。**若实机再崩，第一件事就是删掉这行。**
+- 强制小兵培养/提拔：写 `0x40CAEF` 与 `0x40BF25`（两条 `cmp eax,0x32` 指令的立即数字节）= `0x32` / `0x00`，
+  与原工具 SanIXPKCheat 完全一致（`RuntimeInjection2026.cpp` 的「开启小兵培养」，control id 1013）。
+  - ⚠️ **原实现已删除**：`0x6613EE`（曾被称为「小兵激活标志」）其实是 id 表 A 首条记录的
+    id dword `0x6613EC`（值 `0x000003E8`）的**第 2 个字节**，写入即把 id 1000 破坏成 `0x000103E8`，
+    导致游戏查找 id 失败 → `0x5B72F0` 解引用空指针 → **崩溃 #4（异常地址 `0x5B6754`）**。
+    该写入已于 2026-10-31 删除，见 `docs/_CRASH4_HANDOFF_2026-10-31.md`。
 
 ### 需求 3：指定武将能力成长倍率
 
 - 配置：`GrowthBoost2026`（武将 ID 逗号列表 + `multiplier` 1~10）
 - 注入：`applyGrowthBoost()`——解析列表为 800 字节位图，分配游戏内存写入位图/倍率/辅助代码，hook `codeDynamicAddProficiency` 尾部，按武将 ID 乘倍率
 
-### 需求 4：武将个性化（第一批）
+### 需求 4：武将个性化（第一批·修正版）
 
-- 配置：`OfficerPersonalization2026`（800 武将 × 威力系数/发动率/发动间隔）
+- 配置：`OfficerPersonalization2026`，每武将 53 个值 = 9 系熟练度上限 + 41 个兵法发动间隔(天) + 把握概率(0/1) + 威力系数 + 威力一定加倍(0/1)
 
-| 子项 | 游戏地址 | 实现 | 状态 |
+| 子项 | 游戏地址 | 语义 | 状态 |
 | --- | --- | --- | --- |
-| 熟练度上限 | `0x406A74`/`0x406A7F` | clamp `0x3E8`→`0xFFFF` | ✅ |
-| 兵法发动率 | `0x4FEB95`（`kakuritsu` 调用） | hook 覆盖 chance | ✅ |
-| 兵法发动间隔 | `0x4FF08D`（`idiv` 之后） | hook 覆盖 interval | ✅ |
-| 兵法威力一定加倍(出动画) | `0x506035`（10% 会心 `kakuritsu`） | hook 命中则概率改 100 | ✅ |
-| 兵法威力系数 | `0x43EF44` | hook 点拿不到武将指针 | ⏸ 暂缓 |
+| 熟练度上限 | `0xA2190`（熟练度上限逻辑） | 每武将每系独立上限（查 `proficiencyCap[武将][系]`） | ✅ per-system 注入完成 |
+| 发动间隔(天) | `0x4FF08D`（`idiv` 之后） | 每个兵法独立间隔（军官 esi、技能ID [ebx+0x34]） | ✅ per-skill 注入完成 |
+| 把握概率 | `0x4FEB95`（`kakuritsu`） | 勾选=强制 100% | ✅ |
+| 威力一定加倍(出动画) | `0x506035`（10% 会心） | 勾选=强制会心 | ✅ |
+| 兵法威力系数 | `0x43EF44` | 威力=原威力×系数 | ⏸ 拿不到武将指针，待另找（已逆向实证：该点 this=势力对象 `0x1253C38+idx*0xD4`、乘数=调用链系数参数，无武将。见 `G:\aiprojects\game\san9pkme\06_43EF44_callchain.md`） |
 
-- 发动率注入：`applyOfficerPersonalization()` 分配游戏内存写发动率数组+辅助代码，hook `0x4FEB95`，按武将 ID `(esi-0x1258EE0)/0x128` 查数组覆盖 chance
-- 发动间隔注入：hook `0x4FF08D`，按武将 ID（`ebx`=武将）查数组覆盖 interval
+- 把握概率注入：`applyOfficerPersonalization()` hook `0x4FEB95`，按武将 ID `(esi-0x1258EE0)/0x128` 查 `activationBoost`，命中则 `[esp+4]=100`
+- 威力加倍注入：hook `0x506035` 同理，命中则 `[esp+4]=100`
+- 发动间隔(天) per-skill：hook `0x4FF08D`，`军官索引=(esi-0x1258EE0)/0x128`，`技能ID=[ebx+0x34]`，查 `interval[officer*41+skill]`；仅当存在偏离原值的覆盖时才注入，否则恢复原字节
+- 熟练度上限 per-system：替换 game `0xA2190` 处的熟练度上限逻辑，保留原熟练度增长计算，按 `(武将ID=[esi+4], 系=edi)` 查 `proficiencyCap[武将][系]`（uint16 表），命中则覆盖上限；无任何设置时保持原逻辑
 
 ## 4. 配置与持久化
 
@@ -77,10 +86,8 @@ San9 Companion 是一个 Win32 x86 修改器，通过 `WriteProcessMemory` / 注
 - `Extensions/GrowthBoostList`、`Extensions/GrowthBoostMultiplier`
 - `Extensions/CultivateDuration`
 
-`OfficerPersonalization2026` 走独立配置文件 `San9PKHardCheat.txt`（每行 `威力系数 发动率 发动间隔`，共 800 行；文件缺失则用全 0 默认值）。
+`OfficerPersonalization2026` 走独立配置文件 `San9PKHardCheat.txt`（每武将一个整数块：9 个熟练度上限 + 41 个发动间隔 + 把握概率 + 威力系数 + 威力一定加倍，共 800×53 行；熟练度上限默认 1000，发动间隔默认取游戏原值）。
 
 ## 5. 待办
 
 - 需求 4 威力系数：需另找能拿到武将指针的挂钩点
-- 需求 4 per-officer 配置的 UI（800×3 编辑界面，类似武将配置）
-- 需求 2 强制提拔：当前仅第一个小兵槽位，多槽位激活待确认

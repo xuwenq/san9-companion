@@ -3,6 +3,8 @@
 #include "FormBinding.h"
 #include "ConfigFileText.h"
 #include "../../runtime/AppPaths.h"
+#include "../../runtime/OfficerPersonalization2026.h"
+#include "../../runtime/Runtime2026.h"
 #include <algorithm>
 #include <iterator>
 namespace app
@@ -290,20 +292,34 @@ class PersonPage final : public ui::Dialog
     const int groups[9] = {IDC_FEN_ZHAN, IDC_TU_PO,    IDC_QI_SHE,   IDC_YIQI_SHE, IDC_MENG_CHONG,
                            IDC_JING_LAN, IDC_YING_ZAO, IDC_HUN_LUAN, IDC_RU_MA};
     const int abilityIds[4] = {IDC_COMMAND, IDC_STRENGTH, IDC_INTELLIGENCE, IDC_POLITICS};
-    const int goodIds[9] = {IDC_GOOD_BU_BING, IDC_GOOD_QI_BING,  IDC_GOOD_GONG_QI,
-                            IDC_GOOD_NU_BING, IDC_GOOD_SHUI_JUN, IDC_GOOD_GONG_CHENG,
-                            IDC_GOOD_ZHI_LUE, IDC_GOOD_MOU_LUE,  IDC_GOOD_CE_LUE};
     const int proficiencyIds[9] = {IDC_SLD_BU_BING, IDC_SLD_QI_BING,  IDC_SLD_GONG_QI,
                                    IDC_SLD_NU_BING, IDC_SLD_SHUI_JUN, IDC_SLD_GONG_CHENG,
                                    IDC_SLD_ZHI_LUE, IDC_SLD_MOU_LUE,  IDC_SLD_CE_LUE};
+    const int proficiencyCapIds[9] = {IDC_PROFICIENCY_CAP_1, IDC_PROFICIENCY_CAP_2, IDC_PROFICIENCY_CAP_3,
+                                      IDC_PROFICIENCY_CAP_4, IDC_PROFICIENCY_CAP_5, IDC_PROFICIENCY_CAP_6,
+                                      IDC_PROFICIENCY_CAP_7, IDC_PROFICIENCY_CAP_8, IDC_PROFICIENCY_CAP_9};
+    const int intervalIds[27] = {IDC_INTERVAL_1, IDC_INTERVAL_2, IDC_INTERVAL_3, IDC_INTERVAL_4,
+                                 IDC_INTERVAL_5, IDC_INTERVAL_6, IDC_INTERVAL_7, IDC_INTERVAL_8,
+                                 IDC_INTERVAL_9, IDC_INTERVAL_10, IDC_INTERVAL_11, IDC_INTERVAL_12,
+                                 IDC_INTERVAL_13, IDC_INTERVAL_14, IDC_INTERVAL_15, IDC_INTERVAL_16,
+                                 IDC_INTERVAL_17, IDC_INTERVAL_18, IDC_INTERVAL_19, IDC_INTERVAL_20,
+                                 IDC_INTERVAL_21, IDC_INTERVAL_22, IDC_INTERVAL_23, IDC_INTERVAL_24,
+                                 IDC_INTERVAL_25, IDC_INTERVAL_26, IDC_INTERVAL_27};
+    // 与 intervalIds 一一对应的兵法表技能 id（0..40）。
+    const int intervalSkillIds[27] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+                                      23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+                                      35, 36, 37, 38};
     std::wstring nameQuery, statusQuery;
     std::array<int, 4> abilityQuery{{-1, -1, -1, -1}};
     void initialize() override
     {
+        appendRuntimeLog("PersonPage::initialize begin");
         if (app.hasGameSession() && !app.personSnapshot(snapshot))
             message(L"读游戏武将信息失败，仍可按编号编辑配置。");
+        appendRuntimeLog("PersonPage::initialize snapshot done");
         draft = app.configuration().persons;
         personalizationDraft = app.configuration().personalization;
+        appendRuntimeLog("PersonPage::initialize config copied");
         std::vector<std::wstring> labels;
         labels.reserve(san9::PersonConfig::Count);
         for (size_t i = 0; i < san9::PersonConfig::Count; ++i)
@@ -315,33 +331,36 @@ class PersonPage final : public ui::Dialog
                 label += L"武将";
             labels.push_back(label);
         }
+        appendRuntimeLog("PersonPage::initialize labels built");
         appendItems(IDC_PERSON_LIST, labels);
         readOnly(IDC_FRIENDSHIP_INDEX);
-        for (auto id : goodIds)
-            enable(id, false);
         scrollRange(IDC_FRIENDSHIP_NAVIGATOR, int(san9::PersonConfig::FriendshipCount) - 1);
+        appendRuntimeLog("PersonPage::initialize items appended");
         loadPerson();
         loadFriendship();
-        number(IDC_MAX_EXPERIENCE, draft.maxExperience);
+        appendRuntimeLog("PersonPage::initialize done");
     }
     void loadPerson()
     {
         loading = true;
         select(IDC_PERSON_LIST, int(index));
-        for (size_t i = 0; i < 9; ++i)
-            radio(groups[i], (draft.levels[index] >> (2 * i)) & 3);
+        for (size_t i = 0; i < san9::PersonConfig::Systems; ++i)
+        {
+            int level = int((draft.levels[index] >> (2 * i)) & 3);
+            // 前 5 系已移除「精进」选项，radio 只有 3 档；配置里若仍是第 4 档则按 2 显示，
+            // 但该位在保存时原样保留（见 savePerson），避免静默改写用户数据。
+            if (int(level) > int(san9::PersonConfig::maxLevel(i))) level = int(san9::PersonConfig::maxLevel(i));
+            radio(groups[i], level);
+        }
         if (index < snapshot.size())
         {
             const auto &row = snapshot.at(index);
-            text(IDC_PERSON_NAME, ui::ansiText(row.name.data()));
+            text(IDC_PERSON_NAME, ui::gameText(row.name.data(), row.name.size()));
             text(IDC_PERSON_STATUS, statuses[row.status]);
             for (size_t i = 0; i < 4; ++i)
                 number(abilityIds[i], row.abilities[i]);
             for (size_t i = 0; i < 9; ++i)
-            {
-                check(goodIds[i], (row.good & (1u << i)) != 0);
                 number(proficiencyIds[i], row.proficiency[i]);
-            }
             unsigned mask = 1;
             for (int id = IDC_FEN_ZHAN; id <= IDC_YAO_SHU; ++id)
             {
@@ -352,23 +371,34 @@ class PersonPage final : public ui::Dialog
                 mask <<= 1;
             }
         }
+        for (size_t i = 0; i < 9; ++i)
+            number(proficiencyCapIds[i], personalizationDraft.proficiencyCap[index][i]);
+        for (size_t i = 0; i < 27; ++i)
+            number(intervalIds[i], personalizationDraft.interval[index][intervalSkillIds[i]]);
         number(IDC_POWER_COEF, personalizationDraft.powerPercent[index]);
-        number(IDC_ACTIVATION_RATE, personalizationDraft.activationPercent[index]);
-        number(IDC_ACTIVATION_INTERVAL, personalizationDraft.interval[index]);
-        number(IDC_CRITICAL_HIT, personalizationDraft.criticalHit[index]);
+        check(IDC_ACTIVATION_BOOST, personalizationDraft.activationBoost[index] != 0);
+        check(IDC_CRITICAL_HIT, personalizationDraft.criticalHit[index] != 0);
         loading = false;
     }
     bool savePerson()
     {
         std::uint32_t value = 0;
-        for (size_t i = 0; i < 9; ++i)
+        for (size_t i = 0; i < san9::PersonConfig::Systems; ++i)
         {
             int level = radio(groups[i]);
-            if (level < 0 || level > 3)
+            if (level < 0 || level > int(san9::PersonConfig::MaxLevel))
             {
                 focus(groups[i]);
                 message(L"请选择每类兵法的等级。");
                 return false;
+            }
+            // 前 5 系的第 4 档（「精进」）在界面上不可选，radio 只能返回 0..2；
+            // 但游戏侧仍按等级表判定并应用全局熟练度上限，所以原值为「精进」时
+            // 须沿用原值，不能被 radio 的结果清掉，否则会静默改写用户数据。
+            if (i < san9::PersonConfig::RefinedSystems) {
+                const auto original = int((draft.levels[index] >> (2 * i)) & 3);
+                if (original == int(san9::PersonConfig::MaxLevel))
+                    level = original;
             }
             value |= std::uint32_t(level) << (2 * i);
         }
@@ -396,19 +426,22 @@ class PersonPage final : public ui::Dialog
     }
     bool savePersonalization()
     {
-        return ui::saveNumbers(*this, {
-            ui::bind(IDC_POWER_COEF, 0, 250, personalizationDraft.powerPercent[index]),
-            ui::bind(IDC_ACTIVATION_RATE, 0, 100, personalizationDraft.activationPercent[index]),
-            ui::bind(IDC_ACTIVATION_INTERVAL, 0, 30, personalizationDraft.interval[index]),
-            ui::bind(IDC_CRITICAL_HIT, 0, 1, personalizationDraft.criticalHit[index])});
+        std::vector<ui::NumberBinding> bindings;
+        bindings.push_back(ui::bind(IDC_POWER_COEF, 0, 250, personalizationDraft.powerPercent[index]));
+        for (size_t i = 0; i < 9; ++i)
+            bindings.push_back(ui::bind(proficiencyCapIds[i], 0, 65535, personalizationDraft.proficiencyCap[index][i]));
+        for (size_t i = 0; i < 27; ++i)
+            bindings.push_back(ui::bind(intervalIds[i], 0, int(OfficerPersonalization2026::MaxInterval), personalizationDraft.interval[index][intervalSkillIds[i]]));
+        if (!ui::saveNumbers(*this, bindings))
+            return false;
+        personalizationDraft.activationBoost[index] = checked(IDC_ACTIVATION_BOOST) ? 1 : 0;
+        personalizationDraft.criticalHit[index] = checked(IDC_CRITICAL_HIT) ? 1 : 0;
+        return true;
     }
     bool save()
     {
-        int maximum = 0;
-        if (!savePerson() || !saveFriendship() || !savePersonalization() ||
-            !number(IDC_MAX_EXPERIENCE, 1200, 3000, maximum))
+        if (!savePerson() || !saveFriendship() || !savePersonalization())
             return false;
-        draft.maxExperience = std::uint16_t(maximum);
         return draft.valid();
     }
     void command(int id, ui::Event event) override
@@ -479,7 +512,7 @@ class PersonPage final : public ui::Dialog
             if (query.empty())
                 return;
             next = snapshot.next(index, [&](const san9::PersonInfo &row) {
-                auto value = id == IDC_PERSON_NAME ? ui::ansiText(row.name.data())
+                auto value = id == IDC_PERSON_NAME ? ui::gameText(row.name.data(), row.name.size())
                                                    : std::wstring(statuses[row.status]);
                 return value.find(query) != std::wstring::npos;
             });
@@ -509,12 +542,18 @@ class PersonPage final : public ui::Dialog
         if (id != IDC_FRIENDSHIP_NAVIGATOR)
             return;
         int chosen = int(friendship);
-        if (code == SB_LINELEFT || code == SB_PAGELEFT)
+        // The navigator is a vertical scroll bar, so the line/page codes are the
+        // up/down variants; the left/right constants share their values.
+        if (code == SB_LINEUP || code == SB_PAGEUP)
             --chosen;
-        else if (code == SB_LINERIGHT || code == SB_PAGERIGHT)
+        else if (code == SB_LINEDOWN || code == SB_PAGEDOWN)
             ++chosen;
-        else if (code == SB_THUMBTRACK)
+        else if (code == SB_THUMBTRACK || code == SB_THUMBPOSITION)
             chosen = position;
+        else if (code == SB_TOP)
+            chosen = 0;
+        else if (code == SB_BOTTOM)
+            chosen = int(san9::PersonConfig::FriendshipCount) - 1;
         else
             return;
         chosen = (std::max)(0, (std::min)(int(san9::PersonConfig::FriendshipCount) - 1, chosen));
@@ -538,6 +577,9 @@ class SettingsPage final : public ui::Dialog
   private:
     Controller &app;
     san9::ParameterConfig draft;
+    // The detailed-write trace is a diagnostic aid, not game state: it is read
+    // from the settings file when the page opens and written back on confirm.
+    bool detailedLog = false;
     void speedText()
     {
         text(IDC_PRESENTATION_SPEED,L"演出 " + std::to_wstring(app.configuration().presentationSpeed) + L"×");
@@ -547,10 +589,12 @@ class SettingsPage final : public ui::Dialog
         speedText();
         tooltip(IDC_PRESENTATION_SPEED, L"选择进行阶段的地图与普通动画倍率。暂停、指令阶段及独立事件演出保持原速。");
         const auto &timing = app.configuration().computerWorkTiming;
+        detailedLog = preference(L"Diagnostics", L"LogWrites", false);
         settingsPages({
             {IDC_SKIP_DURABILITY_SIEGE_SELECTION, L"跳过耐久驱动的攻城阵型优先选择", app.configuration().skipSiegeSelection},
             {IDC_IMPROVE_COMPUTER_REWARD_TIMING, L"优化电脑褒奖时间", timing.improveRewards},
-            {IDC_SKIP_COMPUTER_ATTACK_START_DELAY, L"电脑出征规划取消开局等待", timing.skipAttackStartDelay}});
+            {IDC_SKIP_COMPUTER_ATTACK_START_DELAY, L"电脑出征规划取消开局等待", timing.skipAttackStartDelay},
+            {IDC_DETAILED_LOG, L"详细日志（逐次记录内存写入，排错用）", detailedLog}});
         tooltip(IDC_SKIP_DURABILITY_SIEGE_SELECTION,
                 L"跳过原版按城池耐久优先选择攻城阵型的判断，不影响因路径障碍触发的选择。");
         tooltip(IDC_NPC_ALLIE_ATTACK, L"使多个电脑势力更容易集中进攻玩家的城池。");
@@ -558,6 +602,8 @@ class SettingsPage final : public ui::Dialog
                 L"开启：电脑褒奖开局等待初级60天、高级30天，并取消周期窗口；关闭：恢复初级90天、高级45天及30天周期窗口。");
         tooltip(IDC_SKIP_COMPUTER_ATTACK_START_DELAY,
                 L"取消电脑出征规划的开局等待；关闭时初级等待120天、高级60天。实际出征仍须满足兵力、目标等条件。");
+        tooltip(IDC_DETAILED_LOG,
+                L"把每一次内存写入记录到 San9Companion.log，用于排查修改未生效的问题。日志量很大，排错后请关闭。");
         const auto &deathGradient = app.configuration().deathGradient;
         settingsNumber(IDC_LOW_DEATH_RATE, L"低能阵亡率(%)", 0, 100, int(deathGradient.lowRate));
         settingsNumber(IDC_DEATH_THRESHOLD, L"高能归零阈值", 80, 120, int(deathGradient.threshold));
@@ -622,12 +668,16 @@ class SettingsPage final : public ui::Dialog
             !savePreferenceNumber(L"Extensions", L"DeathThreshold", unsigned(threshold)) ||
             !savePreferenceString(L"Extensions", L"GrowthBoostList", growthBoost.officerList) ||
             !savePreferenceNumber(L"Extensions", L"GrowthBoostMultiplier", growthBoost.multiplier) ||
-            !savePreferenceNumber(L"Extensions", L"CultivateDuration", cultivate.durationRounds))
+            !savePreferenceNumber(L"Extensions", L"CultivateDuration", cultivate.durationRounds) ||
+            !savePreference(L"Diagnostics", L"LogWrites", checked(IDC_DETAILED_LOG)))
         {
             settingsPage(1);
             message(L"无法写入 San9PKHardSettings.ini，设置尚未确认。");
             return;
         }
+        // Apply the trace switch to the running session right away, so the user
+        // does not have to restart before the next modification is recorded.
+        setRuntimeLogTrace(checked(IDC_DETAILED_LOG));
         if (app.commitParameters(draft, skip, timing, deathGradient, growthBoost, cultivate)) finish(IDOK);
     }
     void command(int id, ui::Event event) override
@@ -742,6 +792,16 @@ bool smokePages(Controller &c)
     person.radio(IDC_FEN_ZHAN, 1);
     if (!person.savePerson() || !person.saveFriendship() || person.draft.levels[0] % 4 != 1)
         return false;
+    // 前 5 系的第 4 档（「精进」）在界面上不可选，保存时必须沿用原值，
+    // 不能被 radio 的结果清掉（否则会静默改写用户配置）。
+    {
+        const auto saved = person.draft.levels[0];
+        person.draft.levels[0] = (saved & ~3u) | 3u;
+        person.radio(IDC_FEN_ZHAN, 2);
+        if (!person.savePerson() || (person.draft.levels[0] & 3u) != 3u)
+            return false;
+        person.draft.levels[0] = saved;
+    }
     person.destroy();
     auto rows = [&](auto &page, int resource) {
         if (!page.createHidden(resource))

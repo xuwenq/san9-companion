@@ -14,4 +14,8 @@ inline std::filesystem::path executableFile(const wchar_t* name) {
     }();
     return directory / name;
 }
+// 用户设置文件。与可执行文件同目录，便于整包分发。
+inline std::filesystem::path preferencesFile() {
+    return executableFile(L"San9PKHardSettings.ini");
+}
 }

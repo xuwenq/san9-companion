@@ -102,7 +102,7 @@ inline constexpr std::size_t AbilityKillerPropEnabled = 336;
 inline constexpr std::size_t BarbarianNotDisappearEnabled = 340;
 // parameter control 1159: 艨艟可以发动“箭雨”; legacy: m_bAddKillerJianyu
 inline constexpr std::size_t AddKillerJianyuEnabled = 344;
-// parameter control 1160: 鬥舰不能发动“箭岚”; legacy: m_bDisableKillerJianlan
+// parameter control 1160: 斗舰不能发动“箭岚”; legacy: m_bDisableKillerJianlan
 inline constexpr std::size_t DisableKillerJianlanEnabled = 348;
 // parameter control 1161: 不观看单挑过程; legacy: m_bNotDisplaySlash
 inline constexpr std::size_t NotDisplaySlashEnabled = 352;

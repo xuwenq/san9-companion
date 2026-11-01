@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <memory>
 namespace ui
 {
 enum class Event
@@ -105,11 +106,16 @@ class Dialog
     std::vector<HWND> extensions_;
     std::vector<HWND> originals_;
     HWND tooltip_ = nullptr;
-    std::map<int, std::wstring> tooltipText_;
+    // Each tooltip text owns its buffer: the control keeps the pointer, so the
+    // storage must not move when the text is replaced.
+    std::map<int, std::unique_ptr<std::wstring>> tooltipText_;
     bool modal_ = false;
     int settingsTop_ = 49;
 };
-std::wstring gameText(char *value, size_t capacity);
+// Non-destructive conversion of read-only game data such as officer names.
+// The source buffer is never rewritten, so the same snapshot can be rendered
+// and searched repeatedly.
+std::wstring gameText(const char *value, size_t capacity);
 bool smokeTooltipUpdates(Dialog &dialog, int id);
 bool smokeListItems(Dialog &dialog, int id, const std::vector<std::wstring> &expected);
 std::wstring ansiText(const char *value);

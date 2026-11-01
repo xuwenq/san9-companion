@@ -11,7 +11,7 @@ struct SkillValues {
 };
 class SkillConfig {
 public:
-    static constexpr size_t Count=39, GameRecordSize=0x8C;
+    static constexpr size_t Count=41, GameRecordSize=0x8C;
     using Bytes=std::array<std::uint8_t,Count*4>;
     std::array<SkillValues,Count> entries{};
     bool valid() const;

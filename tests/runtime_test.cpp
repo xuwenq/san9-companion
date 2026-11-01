@@ -48,6 +48,9 @@ std::unordered_map<DWORD,BYTE> memory;
 std::unordered_map<DWORD,BYTE> singleByteWrites;
 size_t writes=0, reads=0, releases=0, closes=0;
 std::vector<std::pair<DWORD,SIZE_T>>* recordedReads = nullptr;
+// Opt-in capture of written byte blocks, so tests can assert on injected code.
+bool recordWrites=false;
+std::vector<std::pair<DWORD,std::vector<BYTE>>> recordedWrites;
 std::ofstream memoryTrace;
 void traceMemory(char operation, DWORD address, const void* bytes, SIZE_T size) {
     if (!memoryTrace.is_open()) return;
@@ -63,6 +66,8 @@ DWORD base=0x10000000;
 std::unordered_map<DWORD,DWORD> protections;
 bool allocated=false;
 bool speedAllocated=false;
+std::unordered_map<DWORD,SIZE_T> allocations;
+DWORD nextAuxOffset=0x20000;
 DWORD barrierEip=0;
 unsigned barrierSuspended=0;
 enum class BarrierFault { None, Snapshot, Open, Suspend, Context, Resume };
@@ -112,20 +117,24 @@ HANDLE WINAPI openProcess(DWORD access,BOOL,DWORD) {
 BOOL WINAPI closeHandle(HANDLE) {if(fails(Fault::Close)) return FALSE; ++closes;return TRUE;}
 LPVOID WINAPI allocate(HANDLE,LPVOID,SIZE_T size,DWORD,DWORD) {
     if(fails(Fault::Allocate)) return nullptr;
-    if (size==presentation2026::PayloadSize) { speedAllocated=true; return reinterpret_cast<LPVOID>(base+0x10000); }
-    check(size==0xB000,"2026 allocation size");allocated=true;return reinterpret_cast<LPVOID>(base);
+    DWORD address = 0;
+    if (size==presentation2026::PayloadSize) { speedAllocated=true; address=base+0x10000; }
+    else if (size==0xB000) { allocated=true; address=base; }
+    else { address=base+nextAuxOffset; nextAuxOffset+=0x10000; }
+    allocations[address]=size;
+    return reinterpret_cast<LPVOID>(address);
 }
 BOOL WINAPI release(HANDLE,LPVOID address,SIZE_T size,DWORD type) {
     if(fails(Fault::Release)) return FALSE;
-    if (reinterpret_cast<DWORD>(address)==base+0x10000) {
-        check(speedAllocated && size==0 && type==MEM_RELEASE,"speed allocation released once");
-        speedAllocated=false; ++releases;
-        for (DWORD i=0;i<presentation2026::PayloadSize;++i) memory.erase(base+0x10000+i);
-        return TRUE;
-    }
-    check(allocated && reinterpret_cast<DWORD>(address)==base && size==0 && type==MEM_RELEASE,"owned allocation released once");
-    allocated=false; ++releases;
-    for(DWORD i=0;i<0xB000;++i) memory.erase(base+i);
+    const DWORD target=reinterpret_cast<DWORD>(address);
+    const auto found=allocations.find(target);
+    check(found!=allocations.end() && size==0 && type==MEM_RELEASE,"allocation released once");
+    const SIZE_T allocatedSize=found->second;
+    for(SIZE_T i=0;i<allocatedSize;++i) memory.erase(target+static_cast<DWORD>(i));
+    allocations.erase(found);
+    if (target==base) { check(allocated,"main allocation was tracked"); allocated=false; }
+    else if (target==base+0x10000) { check(speedAllocated,"speed allocation was tracked"); speedAllocated=false; }
+    ++releases;
     return TRUE;
 }
 BOOL WINAPI protect(HANDLE,LPVOID address,SIZE_T size,DWORD value,PDWORD old) {
@@ -159,14 +168,15 @@ BOOL WINAPI write(HANDLE,LPVOID address,LPCVOID buffer,SIZE_T size,SIZE_T* count
     check(size>0 && size<0x10000,"bounded write");
     ++writes;
     const DWORD destination=reinterpret_cast<DWORD>(address);
-    if (!((destination>=0x400000 && destination+size<=0x2000000)
-        || (destination>=base && destination+size<=base+0xB000)
-        || (speedAllocated && destination>=base+0x10000 && destination+size<=base+0x11000))) {
+    const bool inGame = destination>=0xA0000 && destination+size<=0x2000000;
+    bool inAllocation = false;
+    for (const auto& entry : allocations) {
+        if (destination>=entry.first && destination+size<=entry.first+entry.second) { inAllocation=true; break; }
+    }
+    if (!inGame && !inAllocation) {
         std::fprintf(stderr,"invalid target: target=%p source=%p size=%zu write=%zu base=%08lX\n",address,buffer,size,writes,base);
     }
-    check((destination>=0x400000 && destination+size<=0x2000000)
-        || (destination>=base && destination+size<=base+0xB000)
-        || (speedAllocated && destination>=base+0x10000 && destination+size<=base+0x11000),"write stays in game or allocation");
+    check(inGame || inAllocation,"write stays in game or allocation");
     MEMORY_BASIC_INFORMATION region{};
     if (!VirtualQuery(buffer,&region,sizeof(region)) || region.State!=MEM_COMMIT
         || (region.Protect & (PAGE_NOACCESS|PAGE_GUARD))) {
@@ -176,6 +186,7 @@ BOOL WINAPI write(HANDLE,LPVOID address,LPCVOID buffer,SIZE_T size,SIZE_T* count
     const auto p=static_cast<const BYTE*>(buffer);
     traceMemory('W',destination,buffer,size);
     if (size==1) singleByteWrites[destination]=p[0];
+    if (recordWrites) recordedWrites.emplace_back(destination,std::vector<BYTE>(p,p+size));
     for(size_t i=0;i<size;++i) memory[reinterpret_cast<DWORD>(address)+static_cast<DWORD>(i)]=p[i];
     *count=size;
     if (writeCallback) { auto callback=std::move(writeCallback); writeCallback={}; callback(); }
@@ -261,7 +272,7 @@ void branchTest(bool options, bool alternateTarget=false) {
     runtime.setParameters(config);
     if(options) {
         RuntimeTestAccess2026{runtime}.field<DWORD>(4412)=1; RuntimeTestAccess2026{runtime}.field<DWORD>(4416)=1;
-        RuntimeTestAccess2026{runtime}.field<BYTE>(4836)=3; RuntimeTestAccess2026{runtime}.field<BYTE>(4994)=3;
+        RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::SkillFlags)=3; RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::FormationFlags)=3;
     }
     for(int i=0;i<6;++i) {
         runtime.modify(ModifyReason2026::TimerTick);
@@ -280,8 +291,8 @@ void branchTest(bool options, bool alternateTarget=false) {
     check(load(descriptorTarget+3,1)==(options?3u:1u),"scalar descriptor target uses byte offset +3");
     if(options) {
         check(RuntimeTestAccess2026{runtime}.field<DWORD>(4416)==0,"city configuration applied");
-        check((RuntimeTestAccess2026{runtime}.field<BYTE>(4836)&2)==0,"skill configuration applied");
-        check((RuntimeTestAccess2026{runtime}.field<BYTE>(4994)&2)==0,"formation configuration applied");
+        check((RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::SkillFlags)&2)==0,"skill configuration applied");
+        check((RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::FormationFlags)&2)==0,"formation configuration applied");
     }
     check(load(4733494,2)==(options?59792u:33807u),"2026 disable NPC merge option");
     DWORD target=0;RuntimeTestAccess2026{runtime}.dataOut(0x42B5B0,&target,4);
@@ -310,9 +321,11 @@ void unsupportedVersionTest() {
 }
 void resetBackend() {
     writeCallback = {};
+    recordWrites=false; recordedWrites.clear();
     memory.clear(); singleByteWrites.clear(); protections.clear();
     writes=reads=releases=closes=0; allocated=false; present=true; base=0x10000000;
-    speedAllocated=false; barrierEip=0; barrierSuspended=0; barrierFault=BarrierFault::None;
+    speedAllocated=false; allocations.clear(); nextAuxOffset=0x20000;
+    barrierEip=0; barrierSuspended=0; barrierFault=BarrierFault::None;
     calls.fill(0); fault=Fault::None; faultAt=0; fired=false; blockRecovery=false; partialFailure=false; shortSuccess=true;
     processAlive=identityAvailable=true;processPid=windowPid=123;processCreated=1;windowHandle=42;exitAfterRead=0;
 }
@@ -870,6 +883,28 @@ void gameTextTest() {
     check(san9::simplifyGameText(smallBuffer,sizeof(smallBuffer),expanded)==TextResult::insufficientCapacity && std::strcmp(smallBuffer,"A")==0,"expanded conversion does not truncate");
     san9::TextApi lossy;lossy.encode=substitutingEncode;
     check(san9::simplifyGameText(smallBuffer,sizeof(smallBuffer),lossy)==TextResult::unrepresentable && std::strcmp(smallBuffer,"A")==0,"default-character substitution is explicit failure");
+    // The officer table snapshot is read-only game data. Converting it must never
+    // rewrite the Big5 bytes, otherwise the second render decodes GBK as Big5.
+    char traditional[16]{};
+    check(::WideCharToMultiByte(950,0,L"\u570B\u6C11",-1,traditional,sizeof(traditional),nullptr,nullptr)>0,"traditional snapshot fixture encoding");
+    char snapshotCopy[16]{};std::memcpy(snapshotCopy,traditional,sizeof(traditional));
+    const auto wide=san9::gameWideText(traditional,sizeof(traditional));
+    check(wide==L"\u56FD\u6C11","Big5 snapshot converts to wide simplified Chinese");
+    check(std::memcmp(snapshotCopy,traditional,sizeof(traditional))==0,"wide conversion leaves the snapshot bytes untouched");
+    check(san9::gameWideText(traditional,sizeof(traditional))==wide,"repeated conversion of the same snapshot is stable");
+    // A destructive conversion would have replaced the Big5 bytes with GBK, so the
+    // original text must still decode to the same result afterwards.
+    check(san9::gameWideText(traditional,sizeof(traditional))==L"\u56FD\u6C11","snapshot is still decodable as Big5 after conversion");
+    char probe[16]{};std::memcpy(probe,traditional,sizeof(traditional));
+    check(san9::simplifyGameText(probe,sizeof(probe))==TextResult::success && std::memcmp(probe,traditional,sizeof(traditional))!=0
+        && san9::gameWideText(traditional,sizeof(traditional))==L"\u56FD\u6C11","in-place conversion of a copy does not corrupt the snapshot");
+    char truncated[2]={'A','B'};
+    check(san9::gameWideText(nullptr,1).empty()
+        && san9::gameWideText(traditional,0).empty()
+        && san9::gameWideText(truncated,sizeof(truncated)).empty()
+        && truncated[1]=='B',"wide conversion rejects invalid buffers without reading beyond capacity");
+    char invalidWide[]={char(0x81),0};
+    check(san9::gameWideText(invalidWide,sizeof(invalidWide)).empty() && BYTE(invalidWide[0])==0x81,"wide conversion rejects an incomplete Big5 sequence");
     std::puts("Game text encoding, capacity and six API failure checks passed.");
 }
 void personSnapshotTest() {
@@ -910,12 +945,12 @@ void personConfigTest(const char* path) {
     san9::PersonConfig config;
     check(config.valid() && config.levels.back()==0x3FEAA,"person defaults");
     std::ifstream fixture(path);check(bool(fixture),"person fixture exists");
-    check(config.read(fixture).error==san9::PackedReadError::none,"917 person lines load");
+    check(config.read(fixture).error==san9::PackedReadError::none,"916 person lines load");
     const auto levels=config.encodeLevels();const auto friendships=config.encodeFriendships();
     std::ostringstream output;check(config.write(output),"person save");
     san9::PersonConfig copy;std::istringstream input(output.str());
     check(copy.read(input).error==san9::PackedReadError::none && copy.encodeLevels()==levels
-        && copy.encodeFriendships()==friendships && copy.maxExperience==config.maxExperience,"person round trip");
+        && copy.encodeFriendships()==friendships,"person round trip");
     auto replaceLine=[&](size_t index,const char* value) {
         std::istringstream original(output.str());std::ostringstream changed;std::string line;size_t current=0;
         while(std::getline(original,line)) {changed<<(current++==index?value:line.c_str())<<'\n';}
@@ -923,16 +958,16 @@ void personConfigTest(const char* path) {
     };
     for(const auto& invalid:std::vector<std::string>{"", "\n", "12bad\n", "2147483648\n", "-1\n",
         replaceLine(799,"262144"),replaceLine(800,"800"),replaceLine(915,"63963136"),replaceLine(915,"67108864"),
-        replaceLine(916,"1199"),replaceLine(916,"3001"),replaceLine(916,""),output.str()+"1\n"}) {
+        output.str()+"1\n"}) {
         std::istringstream bad(invalid);
         check(config.read(bad).error!=san9::PackedReadError::none && config.encodeLevels()==levels
-            && config.encodeFriendships()==friendships && config.maxExperience==copy.maxExperience,"invalid person file never partially commits");
+            && config.encodeFriendships()==friendships,"invalid person file never partially commits");
     }
-    config.levels.back()=0x3FFFF;config.friendships.back()={799,798,60};config.maxExperience=3000;
+    config.levels.back()=0x3FFFF;config.friendships.back()={799,798,60};
     const auto encoded=config.encodeFriendships();
     check(encoded[690]==0x1F && encoded[691]==3 && encoded[692]==0x1E && encoded[693]==3
         && encoded[694]==60 && encoded[695]==0,"friendships encode three little-endian WORDs");
-    san9::PersonConfig decoded;decoded.decode(config.encodeLevels(),encoded,config.maxExperience);
+    san9::PersonConfig decoded;decoded.decode(config.encodeLevels(),encoded);
     check(decoded.valid() && decoded.levels.back()==0x3FFFF && decoded.friendships.back()==config.friendships.back(),"person runtime byte round trip");
     decoded.friendships.back()[0]=800;std::ostringstream unchanged;unchanged<<"keep";
     check(!decoded.write(unchanged) && unchanged.str()=="keep","invalid person save writes nothing");
@@ -942,17 +977,16 @@ void personConfigTest(const char* path) {
     check(load(RuntimeTestAccess2026{runtime}.field<DWORD>(3700)+799*4)==0x3FFFF,"last person's nine limits applied");
     check(load(RuntimeTestAccess2026{runtime}.field<DWORD>(4400)+115*6,2)==799 && load(RuntimeTestAccess2026{runtime}.field<DWORD>(4400)+115*6+2,2)==798
         && load(RuntimeTestAccess2026{runtime}.field<DWORD>(4400)+115*6+4,2)==60,"last friendship applied as three words");
-    check(load(RuntimeTestAccess2026{runtime}.field<DWORD>(4404),2)==3000,"maximum experience applied as WORD");
-    config.levels[0]=0;config.friendships[0]={1,2,3};config.maxExperience=1200;
+    config.levels[0]=0;config.friendships[0]={1,2,3};
     runtime.setPersonConfig(config);runtime.modify(ModifyReason2026::ParametersConfirmed);
-    check(load(RuntimeTestAccess2026{runtime}.field<DWORD>(3700))==0 && load(RuntimeTestAccess2026{runtime}.field<DWORD>(4400)+4,2)==3
-        && load(RuntimeTestAccess2026{runtime}.field<DWORD>(4404),2)==1200,"confirmed person settings apply on parameter update");
+    check(load(RuntimeTestAccess2026{runtime}.field<DWORD>(3700))==0 && load(RuntimeTestAccess2026{runtime}.field<DWORD>(4400)+4,2)==3,
+        "confirmed person settings apply on parameter update");
     check(runtime.undo(),"person settings use journal undo");
     resetBackend();Runtime2026 exiting(api());version(exiting);initialModify(exiting);exiting.setPersonConfig(config);
     processAlive=false;allocated=false;exiting.modify(ModifyReason2026::TimerTick);
     const auto preserved=exiting.personConfig();
-    check(preserved.encodeLevels()==config.encodeLevels() && preserved.encodeFriendships()==config.encodeFriendships()
-        && preserved.maxExperience==config.maxExperience,"exit preserves full person and 696-byte friendship tables");
+    check(preserved.encodeLevels()==config.encodeLevels() && preserved.encodeFriendships()==config.encodeFriendships(),
+        "exit preserves full person and 696-byte friendship tables");
     resetBackend();std::puts("Person file, encoding, application and exit preservation checks passed.");
 }
 void formationConfigTest(const char* path) {
@@ -992,25 +1026,25 @@ void formationConfigTest(const char* path) {
     runtime.setFormationConfig(config);
     const DWORD target=0x1500B70+26*0x88;
     for(DWORD offset:{0x5Cu,0x60u,0x64u,0x68u,0x6Cu,0x70u,0x74u,0x78u}) store(target+offset,0xAABBCCDD);
-    RuntimeTestAccess2026{runtime}.field<BYTE>(4994)=2;runtime.modify(ModifyReason2026::ParametersConfirmed);
-    check(RuntimeTestAccess2026{runtime}.field<BYTE>(4994)==0,"formation pending consumed");
+    RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::FormationFlags)=2;runtime.modify(ModifyReason2026::ParametersConfirmed);
+    check(RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::FormationFlags)==0,"formation pending consumed");
     for(const auto pair:std::array<std::pair<DWORD,BYTE>,7>{{{0x60,50},{0x64,50},{0x68,60},{0x6C,30},{0x5C,50},{0x70,10},{0x74,8}}})
         check(load(target+pair.first)==(0xAABBCC00u|pair.second),"formation writes one byte and preserves neighbors");
     check(load(target+0x78)==0xAABB2710 && load(RuntimeTestAccess2026{runtime}.field<DWORD>(5212)+26,1)==5,"expense word and independent range table");
-    RuntimeTestAccess2026{runtime}.field<BYTE>(4994)=3;runtime.modify(ModifyReason2026::ParametersConfirmed);
-    check(RuntimeTestAccess2026{runtime}.field<BYTE>(4994)==1,"formation file flag persists");
+    RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::FormationFlags)=3;runtime.modify(ModifyReason2026::ParametersConfirmed);
+    check(RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::FormationFlags)==1,"formation file flag persists");
     check(runtime.undo() && load(target+0x78)==0xAABBCCDD,"formation changes undo through journal");
     resetBackend();Runtime2026 exiting(api());version(exiting);initialModify(exiting);
-    exiting.setFormationConfig(config);RuntimeTestAccess2026{exiting}.field<BYTE>(4994)=1;
+    exiting.setFormationConfig(config);RuntimeTestAccess2026{exiting}.field<BYTE>(san9::layout2026::FormationFlags)=1;
     processAlive=false;allocated=false;exiting.modify(ModifyReason2026::TimerTick);
-    check(exiting.formationConfig().encode()==config.encode() && RuntimeTestAccess2026{exiting}.field<BYTE>(4994)==3,"exit preserves all 216 formation bytes and requeues file settings");
+    check(exiting.formationConfig().encode()==config.encode() && RuntimeTestAccess2026{exiting}.field<BYTE>(san9::layout2026::FormationFlags)==3,"exit preserves all 216 formation bytes and requeues file settings");
     resetBackend();
     std::puts("Formation format, invalid input, game decoding, application and exit preservation checks passed.");
 }
 void skillConfigTest(const char* path) {
     san9::SkillConfig config;
     std::ifstream fixture(path);check(bool(fixture),"skill fixture exists");
-    check(config.read(fixture).error==san9::PackedReadError::none,"39 skill entries load");
+    check(config.read(fixture).error==san9::PackedReadError::none,"41 skill entries load");
     const auto bytes=config.encode();
     check(bytes[0]==13 && bytes[1]==9 && bytes[2]==150 && bytes[3]==0,"skill DWORD byte order");
     std::ostringstream output;check(config.write(output),"skill save");
@@ -1022,19 +1056,19 @@ void skillConfigTest(const char* path) {
     }
     std::array<BYTE,san9::SkillConfig::GameRecordSize> game{};
     game[0x64]=100;game[0x7C]=30;game[0x58]=0xC4;game[0x59]=9;
-    check(copy.importGame(38,game.data(),game.size()) && copy.entries.back().proficiency==2500,"skill game offsets and last entry");
-    check(!copy.importGame(39,game.data(),game.size()) && !copy.importGame(0,game.data(),1),"skill input bounds");
+    check(copy.importGame(40,game.data(),game.size()) && copy.entries.back().proficiency==2500,"skill game offsets and last entry");
+    check(!copy.importGame(41,game.data(),game.size()) && !copy.importGame(0,game.data(),1),"skill input bounds");
     resetBackend();Runtime2026 runtime(api());version(runtime);initialModify(runtime);
     san9::ParameterConfig invalidParameters;invalidParameters.set(1020,-1);
     const auto beforeParameters=RuntimeTestAccess2026{runtime}.field<int>(san9::ParameterConfig::fields()[0].hostOffset);
     bool rejected=false;
     try { runtime.setParameters(invalidParameters); } catch(const std::invalid_argument&) { rejected=true; }
     check(rejected && RuntimeTestAccess2026{runtime}.field<int>(san9::ParameterConfig::fields()[0].hostOffset)==beforeParameters,"runtime rejects invalid parameters before any field changes");
-    config.entries[0]={100,30,2500};runtime.setSkillConfig(config);RuntimeTestAccess2026{runtime}.field<BYTE>(4836)=2;runtime.modify(ModifyReason2026::ParametersConfirmed);
-    check(RuntimeTestAccess2026{runtime}.field<BYTE>(4836)==0,"one-shot skill pending flag consumed");
+    config.entries[0]={100,30,2500};runtime.setSkillConfig(config);RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::SkillFlags)=2;runtime.modify(ModifyReason2026::ParametersConfirmed);
+    check(RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::SkillFlags)==0,"one-shot skill pending flag consumed");
     check(load(0x14FDAD0+0x64)==100 && load(0x14FDAD0+0x7C)==30 && load(0x14FDAD0+0x58)==2500,"skill application matches UI limits");
-    RuntimeTestAccess2026{runtime}.field<BYTE>(4836)=3;runtime.modify(ModifyReason2026::ParametersConfirmed);
-    check(RuntimeTestAccess2026{runtime}.field<BYTE>(4836)==1,"file-loaded flag persists after application");
+    RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::SkillFlags)=3;runtime.modify(ModifyReason2026::ParametersConfirmed);
+    check(RuntimeTestAccess2026{runtime}.field<BYTE>(san9::layout2026::SkillFlags)==1,"file-loaded flag persists after application");
     check(runtime.undo(),"skill edits use session undo");resetBackend();
     std::puts("Skill format, invalid input, game decoding and application checks passed.");
 }
@@ -1128,29 +1162,241 @@ void cityConfigTest(const char* path) {
 }
 void personalizationConfigTest() {
     OfficerPersonalization2026 config;
-    auto allZero=[&] {
-        for (auto v : config.powerPercent) if (v) return false;
-        for (auto v : config.activationPercent) if (v) return false;
-        for (auto v : config.interval) if (v) return false;
-        return true;
-    };
-    check(allZero(),"personalization defaults are all zero");
-    config.powerPercent[0]=120;config.activationPercent[5]=50;config.interval[799]=9;config.criticalHit[7]=1;
+    check(config.proficiencyCap[0][0]==1000 && config.activationBoost[0]==0
+        && config.powerPercent[0]==0 && config.criticalHit[0]==0,"personalization defaults");
+    check(config.interval[0][0]==9 && config.interval[0][23]==6 && config.interval[0][26]==15
+        && config.interval[0][12]==0,"interval defaults to game originals");
+    config.proficiencyCap[0][0]=1200;config.proficiencyCap[0][8]=65535;
+    config.interval[0][1]=3;config.interval[799][38]=0;
+    config.activationBoost[5]=1;config.powerPercent[0]=120;config.criticalHit[7]=1;
     std::ostringstream output;check(config.write(output),"personalization save");
     OfficerPersonalization2026 copy;std::istringstream input(output.str());
     check(copy.read(input).error==san9::PackedReadError::none,"personalization round trip");
-    check(copy.powerPercent[0]==120 && copy.activationPercent[5]==50 && copy.interval[799]==9 && copy.criticalHit[7]==1,
+    check(copy.proficiencyCap[0][0]==1200 && copy.proficiencyCap[0][8]==65535 &&
+          copy.interval[0][1]==3 && copy.interval[799][38]==0 &&
+          copy.activationBoost[5]==1 && copy.powerPercent[0]==120 && copy.criticalHit[7]==1,
           "personalization round-trip values");
+    std::string officer;
+    for (int i=0;i<50;++i) officer+="0\n"; // 9 caps + 41 intervals
     for(const auto& invalid:std::vector<std::string>{
-        "251\n", "0\n101\n", "0\n0\n31\n", "0\n0\n0\n2\n", "0\n0\n"}) {
+        "65536\n", "0\n0\n0\n0\n0\n0\n0\n0\n0\n31\n", officer+"2\n", officer+"0\n251\n", officer+"0\n0\n2\n"}) {
         std::istringstream bad(invalid);
         OfficerPersonalization2026 before=config;
         check(config.read(bad).error!=san9::PackedReadError::none,"invalid personalization rejected");
-        check(before.powerPercent==config.powerPercent && before.activationPercent==config.activationPercent
-            && before.interval==config.interval && before.criticalHit==config.criticalHit,
+        check(before.proficiencyCap==config.proficiencyCap && before.interval==config.interval
+            && before.activationBoost==config.activationBoost && before.powerPercent==config.powerPercent
+            && before.criticalHit==config.criticalHit,
             "invalid personalization never partially commits");
     }
     std::puts("Personalization format, invalid input and round-trip checks passed.");
+}
+// The four per-officer injection blocks derive the officer index from the
+// person record itself: "movzx reg, word [ptr+4]" (CPersonData.id, the
+// person-table index 0..849). The broken 2019-era derivation used
+// (ptr - 0x1258EE0) / 0x128, which requires the pointer to be the officer
+// table base; every caller hands a different object, so that form dereferenced
+// garbage and crashed. These assertions guard the encoded bytes themselves,
+// because the offline tests never execute the injected code.
+void injectionCodeBytesTest() {
+    resetBackend();
+    Runtime2026 runtime(api());
+    version(runtime);
+    GrowthBoost2026 growth;
+    growth.officerList=L"5";
+    growth.multiplier=2;
+    runtime.setGrowthBoost(growth);
+    OfficerPersonalization2026 personalization;
+    personalization.activationBoost[0]=1;
+    personalization.criticalHit[0]=1;
+    personalization.interval[0][0]=12;
+    runtime.setPersonalization(personalization);
+    recordWrites=true;
+    initialModify(runtime);
+    recordWrites=false;
+
+    // Each payload writes the person-table index via "movzx r16, word [ptr+4]"
+    // and bounds it against 0x320 (800). Locate each block by its fixed layout.
+    struct Block {
+        const char* name;
+        size_t size;
+        size_t markerOffset;
+        size_t markerSize;
+        BYTE marker[11];
+        size_t indexOffset;   // position of "movzx reg, word [ptr+4]"
+        BYTE indexBytes[4];   // exact "0F B7 4? 04" form (reg distinguishes block)
+    };
+    const Block blocks[]={
+        {"growth multiplier",40,0x02,4,{0x0F,0xB7,0x46,0x04},0x02,{0x0F,0xB7,0x46,0x04}},
+        {"activation boost",56,0x17,6,{0x0F,0xB7,0x5B,0x04,0x81,0xFB},0x17,{0x0F,0xB7,0x5B,0x04}},
+        {"critical hit",84,0x1F,4,{0x0F,0xB7,0x40,0x04},0x1F,{0x0F,0xB7,0x40,0x04}},
+        {"skill interval",77,0x0F,6,{0x0F,0xB7,0x4E,0x04,0x81,0xF9},0x0F,{0x0F,0xB7,0x4E,0x04}}
+    };
+    for(const auto& block:blocks) {
+        const BYTE* found=nullptr;
+        size_t foundCount=0;
+        for(const auto& entry:recordedWrites) {
+            const auto& bytes=entry.second;
+            if(bytes.size()!=block.size) continue;
+            if(bytes.size()<block.markerOffset+block.markerSize) continue;
+            if(std::memcmp(bytes.data()+block.markerOffset,block.marker,block.markerSize)!=0) continue;
+            found=bytes.data();
+            ++foundCount;
+        }
+        check(foundCount==1,"exactly one injected block matches the expected layout");
+        check(std::memcmp(found+block.indexOffset,block.indexBytes,4)==0,
+            "injected block reads the officer index via word [ptr+4]");
+        // B1/B8: the broken derivation was "sub reg, 0x1258EE0" ("2D E0 8E 25 01"
+        // for eax, "81 EE E0 8E 25 01" for esi). Reject either inside the payload.
+        // The plain immediate "E0 8E 25 01" is fine as a mov-immediate operand and
+        // legitimately appears in the game mirror, so only the sub-opcode forms are
+        // forbidden here.
+        const BYTE subEax[]={0x2D,0xE0,0x8E,0x25,0x01};
+        const BYTE subEsi[]={0x81,0xEE,0xE0,0x8E,0x25,0x01};
+        for(size_t i=0;i+6<=block.size;++i)
+            check(std::memcmp(found+i,subEax,5)!=0 && std::memcmp(found+i,subEsi,6)!=0,
+                "injected block does not subtract the stale officer table base 0x1258EE0");
+    }
+    std::puts("Per-officer injection blocks read the officer index from word [ptr+4].");
+}
+
+// 2026-10-31 crash #3 regression.
+// The original-tool block unk_42C894 is uploaded to allocationBase+0x9A50 and is
+// entered through descriptor 0x42C930, which writes "call 0xA9A50" over the game
+// call site 0x51FA13.  The game then does:
+//
+//   0x51FA13: call 0xA9A50        <- our block
+//   0x51FA18: xor edx,edx
+//   0x51FA1A: je  0x51FA3B
+//   0x51FA3B: mov ecx,eax
+//   0x51FA3D: call 0x45C8A0      <- dereferences ecx as "this"
+//
+// The original block's contract is "return the entry eax unchanged" (its epilogue
+// is "mov eax,ebp; ret 4", and ebp holds the entry eax).  A stub that returns 0
+// therefore makes the game call 0x45C8A0 with ecx==0 and fault on [ecx+0x28].
+// Real-machine WER dump: exception address 0x45C8A0, read address 0x28,
+// return address 0x51FA42.  So the disabled stub must NOT clear eax.
+void disabledOriginalToolBlockTest() {
+    resetBackend();
+    Runtime2026 runtime(api());
+    version(runtime);
+    recordWrites=true;
+    initialModify(runtime);
+    recordWrites=false;
+
+    // The block is uploaded to allocationBase+0x9A50; find the write that lands
+    // there and is short enough to be the disabled stub rather than a full block.
+    const std::vector<BYTE>* stub=nullptr;
+    for(const auto& entry:recordedWrites) {
+        const auto& bytes=entry.second;
+        if(bytes.size()<3 || bytes.size()>8) continue;
+        if(bytes[0]==0xC2 && bytes[1]==0x04 && bytes[2]==0x00) { stub=&bytes; break; }
+    }
+    check(stub!=nullptr,"the disabled original-tool block is uploaded as a stub");
+    if(stub) {
+        check(stub->size()==3,"the disabled stub is exactly \"ret 4\"");
+        // "ret 4" keeps the original block's stack effect (one stdcall argument)
+        // and leaves eax - the entry value the caller consumes - untouched.
+        check((*stub)[0]==0xC2 && (*stub)[1]==0x04 && (*stub)[2]==0x00,
+            "the disabled stub returns the entry value instead of clearing eax");
+        const BYTE xorEax[]={0x33,0xC0};
+        for(size_t i=0;i+2<=stub->size();++i)
+            check(std::memcmp(stub->data()+i,xorEax,2)!=0,
+                "the disabled stub must not clear eax (crash #3 root cause)");
+    }
+    std::puts("Disabled original-tool block returns the caller's value instead of zeroing eax.");
+}
+
+// 2026-10-31 crash #4 regression.
+//
+// The game keeps five static tables of ids 0x3E8..0x3F2 in its .data section,
+// each entry 0x20 bytes long with the id in entry+0x04:
+//
+//   0x6613E8  0x665B70  0x667740  0x667C08  0x669F78
+//
+// The game looks ids up in a manager vector with "cmp dword [entry+4], id" and
+// getflag (0x5B72F0) dereferences the lookup result without a null check.  Our
+// own applyCultivate() used to write one byte to 0x6613EE, which is byte index 2
+// of the id dword at 0x6613EC (value 0x000003E8, id 1000).  The write turned the
+// id into 0x000103E8, the lookup for 0x3E8 then failed, and the game faulted at
+// 0x5B6754 reading [0+0x14].  No recorded write may touch these tables.
+//
+// The test also pins the correct implementation of 强制小兵培养: the original
+// tool writes the immediate byte of two "cmp eax, 0x32" instructions,
+// 0x40CAEF and 0x40BF25, with 0x32 when enabled and 0x00 when disabled.
+void idTableWriteGuardTest() {
+    // Table base -> eleven entries of 0x20 bytes.
+    const DWORD idTables[] = {0x6613E8u, 0x665B70u, 0x667740u, 0x667C08u, 0x669F78u};
+    constexpr DWORD idTableEntries = 11;
+    constexpr DWORD idTableStride = 0x20;
+    // The id dword of table A entry 0 lives at 0x6613EC; 0x6613EE is its byte 2.
+    constexpr DWORD idFieldOfTableA = 0x6613ECu;
+    constexpr DWORD forbiddenByte = 0x6613EEu;
+
+    auto overlapsIdTable = [&](DWORD destination, size_t size) {
+        for (DWORD table : idTables) {
+            const DWORD begin = table;
+            const DWORD end = table + idTableEntries * idTableStride;
+            if (destination < end && begin < destination + size) return true;
+        }
+        return false;
+    };
+
+    resetBackend();
+    Runtime2026 runtime(api());
+    version(runtime);
+    san9::ParameterConfig parameters;
+    parameters.set(1013, 1); // 开启小兵培养
+    runtime.setParameters(parameters);
+
+    recordWrites=true;
+    initialModify(runtime);
+    recordWrites=false;
+
+    check(!recordedWrites.empty(),"the runtime recorded its memory writes");
+    for (const auto& entry : recordedWrites) {
+        const DWORD destination = entry.first;
+        const size_t size = entry.second.size();
+        check(!overlapsIdTable(destination, size),
+            "no recorded write overlaps a static id table region");
+        // The former crash #4 write.  Spell it out separately so the failure
+        // message names the exact address that used to break id 0x3E8.
+        check(!(destination <= forbiddenByte && forbiddenByte < destination + size),
+            "the write to 0x6613EE (byte 2 of the id dword 0x6613EC) is gone");
+        check(!(destination <= idFieldOfTableA && idFieldOfTableA < destination + size),
+            "the id dword 0x6613EC of table A is never written");
+    }
+
+    // 强制小兵培养 writes 0x32 into the two "cmp eax, 0x32" immediate bytes.
+    auto lastByteWrittenTo = [&](DWORD address) -> int {
+        int result = -1;
+        for (const auto& entry : recordedWrites)
+            if (entry.first == address && entry.second.size() == 1) result = entry.second[0];
+        return result;
+    };
+    check(lastByteWrittenTo(0x40CAEFu) == 0x32,
+        "开启小兵培养 writes 0x32 to the immediate byte at 0x40CAEF");
+    check(lastByteWrittenTo(0x40BF25u) == 0x32,
+        "开启小兵培养 writes 0x32 to the immediate byte at 0x40BF25");
+
+    // Disabled: both immediate bytes go back to 0x00.
+    san9::ParameterConfig disabled;
+    disabled.set(1013, 0);
+    runtime.setParameters(disabled);
+    recordWrites=true;
+    runtime.modify(ModifyReason2026::ParametersConfirmed);
+    recordWrites=false;
+
+    check(lastByteWrittenTo(0x40CAEFu) == 0x00,
+        "开启小兵培养 disabled writes 0x00 to the immediate byte at 0x40CAEF");
+    check(lastByteWrittenTo(0x40BF25u) == 0x00,
+        "开启小兵培养 disabled writes 0x00 to the immediate byte at 0x40BF25");
+    for (const auto& entry : recordedWrites) {
+        const DWORD destination = entry.first;
+        const size_t size = entry.second.size();
+        check(!overlapsIdTable(destination, size),
+            "no write overlaps a static id table region when the option is switched off");
+    }
+    std::puts("No runtime write touches the static id tables; 强制小兵培养 targets 0x40CAEF and 0x40BF25.");
 }
 void lifecycleTest() {
     // Keep the five large runtime fixtures off the unoptimized Debug stack.
@@ -1734,7 +1980,10 @@ int main(int argc, char** argv) {
             {"--siege-selection",siegeSelectionTest},{"--state-bounds",stateBoundsTest},{"--image-bounds",imageBoundsTest},
             {"--computer-work-timing",computerWorkTimingTest},
             {"--game-text",gameTextTest},{"--person-snapshot",personSnapshotTest},
-            {"--lifecycle",lifecycleTest},{"--personalization",personalizationConfigTest}
+            {"--lifecycle",lifecycleTest},{"--personalization",personalizationConfigTest},
+            {"--injection-code-bytes",injectionCodeBytesTest},
+            {"--disabled-original-block",disabledOriginalToolBlockTest},
+            {"--id-table-write-guard",idTableWriteGuardTest}
         };
         const struct ConfigCheck {
             const char* option;
@@ -1782,7 +2031,7 @@ int main(int argc, char** argv) {
         if(configurationsRequested) {
             presentationSpeedRuntimeTest();
             configFilesTest(); controllerTest(configRoot);
-            coreBoundaryTest();gameSnapshotsTest();appPathsTest();stateBoundsTest();imageBoundsTest();gameTextTest();personSnapshotTest();siegeSelectionTest();computerWorkTimingTest();personalizationConfigTest();
+            coreBoundaryTest();gameSnapshotsTest();appPathsTest();stateBoundsTest();imageBoundsTest();gameTextTest();personSnapshotTest();siegeSelectionTest();computerWorkTimingTest();personalizationConfigTest();injectionCodeBytesTest();disabledOriginalToolBlockTest();idTableWriteGuardTest();
             for(const auto& entry:configurations) entry.run((configRoot/entry.file).string().c_str());
         }
     } catch(const std::exception& error) {

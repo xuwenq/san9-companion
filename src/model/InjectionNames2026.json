@@ -253,7 +253,7 @@
     "348": {
       "name": "DisableKillerJianlanEnabled",
       "legacy": "m_bDisableKillerJianlan",
-      "evidence": "parameter control 1160: 鬥舰不能发动“箭岚”"
+      "evidence": "parameter control 1160: 斗舰不能发动“箭岚”"
     },
     "352": {
       "name": "NotDisplaySlashEnabled",

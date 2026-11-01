@@ -9,6 +9,10 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <sstream>
+#include <iomanip>
+#include <cstdio>
+#include <cstddef>
 #include "../model/ParameterConfig.h"
 #include "../model/CityConfig.h"
 #include "../model/SkillConfig.h"
@@ -51,6 +55,16 @@ struct ConfigurationState2026 {
     bool formationPending = false;
 };
 struct RuntimeTestAccess2026;
+// 追加诊断日志到可执行文件旁的 San9Companion.log；失败静默，绝不干扰注入流程。
+// 日志使用持久流并受总字节上限约束，避免高频写入拖慢注入事务。
+void appendRuntimeLog(const char* message);
+void appendRuntimeLog(const char* message, std::size_t length);
+// 高频逐次事件（如每次内存写入）。默认不记录，设置 SAN9_LOG_WRITES=1 才开启。
+void appendRuntimeLogTrace(const char* message, std::size_t length);
+// 运行时开关：开启/关闭逐次写入追踪。设置页与命令行/环境变量共用这一条路径。
+void setRuntimeLogTrace(bool enabled);
+// 关闭并释放日志文件句柄；程序退出或测试结束时调用。
+void closeRuntimeLog();
 // Offset-addressed x86 state recovered from the 2026 binary, independent of MFC.
 // Only this translation layer exposes offsets; dialogs exchange typed values.
 class Runtime2026 final {
@@ -158,7 +172,9 @@ private:
     void applyOfficerPersonalization();
     void installPerOfficerHook(HANDLE process, const std::array<std::uint8_t, 800>& values,
                                DWORD hookAddress, const BYTE* original, size_t originalSize,
-                               const BYTE* code, size_t codeSize, size_t arrayAddrOffset);
+                               DWORD returnAddress,
+                               const BYTE* code, size_t codeSize, size_t arrayAddrOffset,
+                               const char* feature, size_t extraJumpRelOffset = SIZE_MAX);
     void modifyBranches(ModifyReason2026 reason);
     bool connectGame(HWND window);
     void animateConnectedStatus();
@@ -209,6 +225,17 @@ private:
     }
     template<class A, class B> BOOL writeMemory(HANDLE process, A target, B source, SIZE_T size, SIZE_T*) {
         validateImagePointer(addressOf(source),size);
+        {
+            // Hot path: format without allocating, so the journal transaction is not
+            // slowed down by per-write diagnostics.
+            char line[80];
+            const auto address = static_cast<unsigned long long>(addressOf(target));
+            const int length = std::snprintf(line,sizeof(line),
+                "write target=0x%08llx size=%llu",
+                address,
+                static_cast<unsigned long long>(size));
+            if (length > 0) appendRuntimeLogTrace(line, static_cast<std::size_t>(length));
+        }
         return writeBytes(process, reinterpret_cast<LPVOID>(addressOf(target)),
             reinterpret_cast<LPCVOID>(addressOf(source)), size);
     }

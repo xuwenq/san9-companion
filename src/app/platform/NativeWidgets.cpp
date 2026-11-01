@@ -333,14 +333,14 @@ void Dialog::tooltip(int id, const std::wstring &message)
                                CW_USEDEFAULT, CW_USEDEFAULT, window_, nullptr, instance(), nullptr);
     if (!tooltip_)
         throw std::runtime_error("cannot create tooltip");
-    auto [entry, inserted] = tooltipText_.try_emplace(id, message);
-    if (!inserted) entry->second = message;
+    auto [entry, inserted] = tooltipText_.try_emplace(id, std::make_unique<std::wstring>());
     TOOLINFOW info{sizeof(info)};
     info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
     info.hwnd = window_;
     info.uId = reinterpret_cast<UINT_PTR>(control);
-    info.lpszText = entry->second.data();
     if (inserted) {
+        *entry->second = message;
+        info.lpszText = entry->second->data();
         wchar_t className[16]{};
         GetClassNameW(control, className, _countof(className));
         if (lstrcmpiW(className, L"Static") == 0)
@@ -351,9 +351,17 @@ void Dialog::tooltip(int id, const std::wstring &message)
         }
         SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, 420);
         SendMessageW(tooltip_, TTM_SETDELAYTIME, TTDT_AUTOPOP, 15000);
-    } else {
-        SendMessageW(tooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&info));
+        return;
     }
+    // The control keeps the text pointer, so the replacement must own a stable
+    // buffer of its own and the previous one may only be released once the
+    // control no longer references it.
+    auto replacement = std::make_unique<std::wstring>(message);
+    info.lpszText = replacement->data();
+    // TTM_UPDATETIPTEXTW has no documented return value, so its result cannot
+    // be used as a success flag; only the initial TTM_ADDTOOLW bind is checked.
+    SendMessageW(tooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&info));
+    entry->second = std::move(replacement);
 }
 bool smokeTooltipUpdates(Dialog &dialog, int id)
 {
@@ -426,6 +434,7 @@ std::optional<std::filesystem::path> Dialog::file(bool save, const wchar_t *name
 }
 bool Dialog::savePreference(const wchar_t *section, const wchar_t *key, bool value) const
 {
+    if (smoke) return true;
     return WritePrivateProfileStringW(section, key, value ? L"1" : L"0", preferences().c_str()) != FALSE;
 }
 bool Dialog::savePreferenceNumber(const wchar_t *section, const wchar_t *key, unsigned value) const
@@ -625,7 +634,7 @@ INT_PTR CALLBACK Dialog::procedure(HWND window, UINT message, WPARAM first, LPAR
             self->tick(unsigned(first));
             return TRUE;
         }
-        if (message == WM_HSCROLL)
+        if (message == WM_HSCROLL || message == WM_VSCROLL)
         {
             self->scroll(GetDlgCtrlID(reinterpret_cast<HWND>(second)), LOWORD(first), HIWORD(first));
             return TRUE;
@@ -669,11 +678,12 @@ std::wstring ansiText(const char *value)
     result.pop_back();
     return result;
 }
-std::wstring gameText(char *value, size_t capacity)
+std::wstring gameText(const char *value, size_t capacity)
 {
-    if (san9::simplifyGameText(value, capacity) != san9::TextResult::success)
+    auto result = san9::gameWideText(value, capacity);
+    if (result.empty())
         return L"?";
-    return ansiText(value);
+    return result;
 }
 void fatalError(const char *message)
 {

@@ -1,4 +1,6 @@
 #include "Runtime2026.h"
+#include <sstream>
+#include <iomanip>
 
 using _DWORD = DWORD;
 using _WORD = WORD;
@@ -9,6 +11,28 @@ static_assert(sizeof(void*) == 4, "2026 injection requires Win32");
 static const BYTE unk_41CD60[] = {
 #include "../generated/OfficialLoyalty.inc"
 };
+
+// 原工具 unk_42C894 代码块（writePatch 到 allocationBase+0x9A50）在游戏启动早期即触发，
+// 其逻辑 `mov esi,[esi+0x298]; 查找 id=0x45a; mov [eax+4],[0x661140]` 会：
+//   1. 查找失败(eax=0)时写空指针 → 0x9A73 崩溃；
+//   2. 查找成功时把游戏对象 id 字段(+4)污染成 [0x661140] 的未初始化值 → 连锁查找失败 → 0x5B6754 崩溃。
+// 该功能非本项目四类武将个性化，属原工具(SanIXPKCheat)遗留代码块，直接禁用。
+//
+// ★ 禁用桩必须保留原块的**返回值契约**：原块入口 eax = 调用方传入的对象指针，
+//   出口是 `mov eax,ebp; ret 4`，即把入口 eax 原样返回给调用方。
+//   调用点 0x51FA13（descriptor 0x42C930 写入 `call 0xA9A50`）依赖该返回值：
+//     0x51FA13: call 0xA9A50
+//     0x51FA18: xor edx,edx ; je 0x51FA3B
+//     0x51FA3B: mov ecx,eax
+//     0x51FA3D: call 0x45C8A0      ← 以 ecx(=eax) 为 this，eax==0 则读 [0x28] 崩溃
+//   2026-10-31 实机 dump 证实：早先使用的 `xor eax,eax; ret 4` 桩把 eax 抹成 0，
+//   直接制造崩溃 #3（异常地址 0x45C8A0，读取地址 0x28，返回地址 0x51FA42）。
+//   故改用 `ret 4`：原样返回入口 eax（eax 是寄存器传参，调用方期望拿回的就是它），
+//   既不执行任何污染逻辑，又保持返回值与栈平衡语义。
+static const BYTE unk_42C894_disabled[] = {
+    0xC2, 0x04, 0x00,  // ret 4  (eax 原样返回；栈上弹出 1 个 stdcall 参数)
+};
+static_assert(sizeof(unk_42C894_disabled) == 3, "disabled stub size");
 
 // Evidence: 0x409E10. All commands execute inside the caller's journal transaction.
 void Runtime2026::modifyBranches(ModifyReason2026 reason)
@@ -81,6 +105,13 @@ bool Runtime2026::connectGame(HWND window)
       pageSize * field<DWORD>(san9::injection2026::AllocPageNum), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
   field<DWORD>(san9::layout2026::AllocationBase) = reinterpret_cast<DWORD>(allocation);
   if (rebase()) lpAddress = allocation;
+  {
+    std::ostringstream line;
+    line << "connected allocationBase=0x" << std::hex << std::setw(8) << std::setfill('0')
+         << reinterpret_cast<DWORD>(allocation) << std::dec << " pages="
+         << field<DWORD>(san9::injection2026::AllocPageNum);
+    appendRuntimeLog(line.str().c_str());
+  }
   field<DWORD>(san9::layout2026::EventSequence) = 0;
   return true;
 }
@@ -288,7 +319,7 @@ void Runtime2026::installCoreHooks()
   writePatch(dword_42F040, &unk_42C5C0, 0x2Au);
   writePatch(off_42C7C8, &unk_42C7CC, 8u);
   writePatch(dword_42F03C, dword_42C7D4, 0xBEu);
-  writePatch(dword_42F038, &unk_42C894, 0x88u);
+  writePatch(dword_42F038, &unk_42C894_disabled, sizeof(unk_42C894_disabled));
   writePatch(dword_42F034, &unk_42C9D0, 0x20u);
   writePatch(dword_42F030, &unk_42CA18, 0x2Eu);
   writePatch(dword_42F02C, &unk_42CC90, 0x72u);
@@ -352,7 +383,7 @@ void Runtime2026::installCoreHooks()
   writePatch(dword_42F33C, &codeGetForceDangerCoef, 0x5Bu);
   writePatch(dword_42F380, &codeStopTaskBug, 0x16u);
   writePatch(dword_42F2BC, &codeAutoSaveDocname, 0x15u);
-  writePatch(dword_42F2B0, &codePersonExperience, 0x5Du);
+  // codePersonExperience 改由 applyProficiencyCap 按需写原版/上限版，避免此处晚于 installCoreHooks 覆盖掉上限逻辑。
   writePatch(dword_42F2A0, &codeIntelligenceOfficerPara, 0x2Fu);
   writePatch(dword_42F290, &codeMaxPeopleHeartBasic, 0x17u);
   writePatch(dword_42F27C, &codeDynamicAddProficiency, 0x46u);
@@ -1085,7 +1116,6 @@ void Runtime2026::applyParameterPatches()
   int selectedEnableRelayDispatchIndexBias;
   int selectedEnableCityPopulationCoefIndexBias;
   DWORD patchValue = 0;
-  writePatch(*(LPVOID *)(state + 4404), stateBytes(san9::layout2026::MaxExperience, 2u), 2u);
   writePatch(*(LPVOID *)(state + 3700), stateBytes(san9::layout2026::PersonLevels, 0xC80u), 0xC80u);
   writePatch(*(LPVOID *)(state + san9::injection2026::PersonFriendshipAddress), stateBytes(san9::layout2026::PersonFriendships, 0x2B8u), 0x2B8u);
   byte_42F164 = *(_BYTE *)(state + san9::injection2026::MoneyCut1);

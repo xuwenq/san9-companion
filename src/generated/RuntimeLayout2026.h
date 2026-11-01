@@ -2,7 +2,7 @@
 #pragma once
 #include <cstddef>
 namespace san9::layout2026 {
-inline constexpr std::size_t StateSize = 7692;
+inline constexpr std::size_t StateSize = 7844;
 struct Span { std::size_t offset, size; };
 // Evidence: 0x4191C0 / 0x4050B0
 inline constexpr std::size_t PersonLevels = 500;
@@ -25,14 +25,14 @@ inline constexpr std::size_t CityLimitsSize = 300;
 // Evidence: 0x419E70 / 0x409E10
 inline constexpr std::size_t SkillFlags = 4836;
 inline constexpr std::size_t SkillFlagsSize = 1;
-// Evidence: 0x419E70
+// Evidence: 0x419E70 (39->41 rows; game table 0x453720 bounds 0x29)
 inline constexpr std::size_t SkillEntries = 4838;
-inline constexpr std::size_t SkillEntriesSize = 156;
-// Evidence: 0x419FB0 / 0x409E10
-inline constexpr std::size_t FormationFlags = 4994;
+inline constexpr std::size_t SkillEntriesSize = 164;
+// Evidence: 0x419FB0 / 0x409E10 (relocated: SkillEntries grew 156->164)
+inline constexpr std::size_t FormationFlags = 7624;
 inline constexpr std::size_t FormationFlagsSize = 1;
-// Evidence: 0x419FB0
-inline constexpr std::size_t FormationEntries = 4996;
+// Evidence: 0x419FB0 (relocated: SkillEntries grew 156->164)
+inline constexpr std::size_t FormationEntries = 7625;
 inline constexpr std::size_t FormationEntriesSize = 216;
 // Evidence: 0x409E10 / VirtualAllocEx
 inline constexpr std::size_t AllocationBase = 96;
