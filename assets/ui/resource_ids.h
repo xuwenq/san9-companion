@@ -263,6 +263,16 @@
 #define IDC_INTERVAL_26                 1249
 #define IDC_INTERVAL_27                 1250
 #define IDC_DETAILED_LOG                1251
+// 熟练度状态指示器（武将配置页，每兵法系一个）：1252=步兵 … 1260=策略
+#define IDC_PROFICIENCY_MARK_1         1252
+#define IDC_PROFICIENCY_MARK_2         1253
+#define IDC_PROFICIENCY_MARK_3         1254
+#define IDC_PROFICIENCY_MARK_4         1255
+#define IDC_PROFICIENCY_MARK_5         1256
+#define IDC_PROFICIENCY_MARK_6         1257
+#define IDC_PROFICIENCY_MARK_7         1258
+#define IDC_PROFICIENCY_MARK_8         1259
+#define IDC_PROFICIENCY_MARK_9         1260
 #define IDM_PLAYER_FORCE_START          32771
 #define IDM_PLAYER_FORCE_END            32820
 

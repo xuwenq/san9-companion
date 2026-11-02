@@ -4,6 +4,7 @@
 #include "ConfigFileText.h"
 #include "BuildInfo.h"
 #include "../../runtime/Runtime2026.h"
+#include "../../runtime/RuntimeDiagnostics2026.h"
 #include "../../runtime/AppPaths.h"
 namespace app
 {
@@ -123,6 +124,12 @@ int run(bool smoke)
         const auto logPath = san9::executableFile(L"San9Companion.log");
         appendRuntimeLog(("log file: " + logPath.string()).c_str());
     }
+    // A crash of the companion is a silent loss of every pending change, so
+    // the dump and the fault line are recorded before anything else runs.
+    san9::installCrashHandlers();
+    san9::enableCrashDumps(L"San9PK.exe");
+    san9::enableCrashDumps(L"San9Companion.exe");
+    appendRuntimeLogFormat("CRASH DUMPS folder: ", san9::crashDumpFolder().string());
     ui::initializeWindows();
     Controller controller;
     MainWindow window(controller);

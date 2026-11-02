@@ -82,33 +82,51 @@ print("INTERVAL: imm32@0x21, rel8@0x0D/0x19/0x29->0x3E, rel32@0x39/0x48->0x4FF09
 
 
 # ============================================================
-# 2) ACTIVATION  hook 0x4FEB90  (5-byte original BE 0A 00 00 00)
-#    return 0x4FEB9E
+# 2) ACTIVATION  hook 0x4FEC59  (5-byte original 6A 0B 52 FF D5)
+#    return 0x4FEC5E
 #    activationBoost[]: byte[800].
-#    Must not touch stack before the [0x5FF2F0] call (3 args already pushed).
-#    Unit -> [+0x30] CPersonData -> word[+4] officer.
+#
+#    0x4FEC59 is the **activation** (把握) roll inside 0x4FEBB0, NOT the resist
+#    roll.  The game computes "chance = 100 + jitter" (0x4FEC4C..0x4FEC55) and
+#    then rolls it; a failure returns 0 from 0x4FEBB0, i.e. the skill does not
+#    activate at all.  "把握概率 100%" therefore means: the matched officer
+#    skips the roll entirely and reports success (eax = 1).
+#
+#    The resist roll lives in a different function (0x4FEB20, chance =
+#    (opponent value - attacker proficiency) / 10) and must stay untouched.
+#
+#    Unit -> [+0x30] CPersonData -> word[+4] officer index.
+#    Stack accounting: kakuritsu is __cdecl (export ?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z,
+#    "YAH" == __cdecl), so the caller cleans the arguments.  The original
+#    "add esp,0x14" at 0x4FEC5E clears exactly five pushes: eax(0x4FEC25) +
+#    ebp(0x4FEC30) + 1(0x4FEC53) + 0xB + edx.  The hit path therefore has to push
+#    0xB and edx exactly like the original, otherwise the stack is off by 8 bytes
+#    per activation.
 # ============================================================
 ACTIVATION = assemble("activation", [
-    "8BDE",                                # 00 mov ebx,esi        unit (callee-saved, survives call)
-    "BE0A000000",                          # 02 mov esi,0xA
-    "FF15F0F25F00",                        # 07 call [0x5FF2F0]
-    "83C40C",                              # 0D add esp,0xC
-    "8B5B30",                              # 10 mov ebx,[ebx+0x30]  officer
-    "85DB",                                # 13 test ebx,ebx
-    "74", "00",                            # 15 je DONE(0x35)
-    "0FB75B04",                            # 17 movzx ebx,word[ebx+4]
-    "81FB20030000",                        # 1B cmp ebx,0x320
-    "73", "00",                            # 21 jae DONE(0x35)
-    "B900000000",                          # 23 mov ecx,activationArray (imm32@0x24)
-    "803C1900",                            # 28 cmp byte[ecx+ebx],0
-    "74", "00",                            # 2C je DONE(0x35)
-    "B801000000",                          # 2E mov eax,1           force 100%
-    "E900000000",                          # 33 jmp 0x4FEB9E (rel32@0x33)
+    "8BCE",                                # 00 mov ecx, esi          unit
+    "8B4130",                              # 02 mov eax, [ecx+0x30]   CPersonData
+    "85C0",                                # 05 test eax, eax
+    "74", "00",                            # 07 je NORMAL(0x2C)
+    "0FB74004",                            # 09 movzx eax, word [eax+4]  officer
+    "3D20030000",                          # 0D cmp eax, 0x320
+    "73", "00",                            # 12 jae NORMAL(0x2C)
+    "B900000000",                          # 14 mov ecx, activationArray (imm32@0x15)
+    "803C0800",                            # 19 cmp byte [eax+ecx], 0
+    "74", "00",                            # 1D je NORMAL(0x2C)
+    "6A0B",                                # 1F push 0xB              hit: same args as original
+    "52",                                  # 21 push edx              chance argument
+    "B801000000",                          # 22 mov eax, 1            skip the roll
+    "E9", "00000000",                      # 27 jmp 0x4FEC5E (rel32@0x28)
+    "6A0B",                                # 2C NORMAL: push 0xB
+    "52",                                  # 2E push edx
+    "FF15F0F25F00",                        # 2F call [0x5FF2F0]      original roll
+    "E9", "00000000",                      # 35 jmp 0x4FEC5E (rel32@0x36)
 ], base=0x10000000,
-    imm32={0x24: 0x12346000},
-    rel8={0x15: 0x33, 0x21: 0x33, 0x2C: 0x33},
-    rel32={0x33: 0x4FEB9E})
-print("ACTIVATION: arr imm32@0x24, rel8@0x15/0x21/0x2C->0x33, rel32@0x33->0x4FEB9E\n")
+    imm32={0x15: 0x12346000},
+    rel8={0x07: 0x2C, 0x12: 0x2C, 0x1D: 0x2C},
+    rel32={0x27: 0x4FEC5E, 0x35: 0x4FEC5E})
+print("ACTIVATION: arr imm32@0x15, rel8@0x07/0x12/0x1D->0x2C, rel32(E9)@0x27/0x35->0x4FEC5E\n")
 
 
 # ============================================================

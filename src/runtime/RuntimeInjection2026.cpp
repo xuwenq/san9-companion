@@ -34,38 +34,62 @@ static const BYTE unk_42C894_disabled[] = {
 };
 static_assert(sizeof(unk_42C894_disabled) == 3, "disabled stub size");
 
+// The reason name appears in the log so a reader can tell which trigger
+// produced a given patch application.
+static const char* modifyReasonName(ModifyReason2026 reason) {
+  switch (reason) {
+  case ModifyReason2026::TimerTick: return "TimerTick";
+  case ModifyReason2026::GameNotification: return "GameNotification";
+  case ModifyReason2026::GameDialogClosed: return "GameDialogClosed";
+  case ModifyReason2026::ParametersConfirmed: return "ParametersConfirmed";
+  case ModifyReason2026::PresentationSpeed: return "PresentationSpeed";
+  }
+  return "Unknown";
+}
+
 // Evidence: 0x409E10. All commands execute inside the caller's journal transaction.
 void Runtime2026::modifyBranches(ModifyReason2026 reason)
 {
+  appendRuntimeLogFormat("BRANCH reason=", modifyReasonName(reason));
   const HWND window = findGameWindow(ClassName, nullptr);
   if (!window)
   {
     field<HANDLE>(san9::layout2026::ProcessHandle) = nullptr;
     field<HWND>(san9::layout2026::TargetWindow) = nullptr;
     field<DWORD>(san9::layout2026::ConnectTicks) = 0;
-    setStatus(RuntimeStatusKind2026::WaitingForGame);
+    setStatus(RuntimeStatusKind2026::WaitingForGame, "no game window found");
     return;
   }
   if (field<HWND>(san9::layout2026::TargetWindow) != window)
   {
+    appendRuntimeLog("BRANCH initial connection to a new game window");
     if (!connectGame(window)) return;
+    appendRuntimeLog("BRANCH installing core hooks");
     installCoreHooks();
+    appendRuntimeLog("BRANCH installing notification bridge");
     installNotificationBridge();
+    appendRuntimeLog("BRANCH uploading injection payloads");
     uploadInjectionPayloads();
+    appendRuntimeLog("BRANCH installing gameplay patches");
     installGameplayPatches();
+    appendRuntimeLog("BRANCH applying parameter patches");
     applyParameterPatches();
+    appendRuntimeLog("BRANCH applying game configuration");
     applyGameConfiguration(reason);
+    appendRuntimeLog("BRANCH initial connection finished");
     animateConnectedStatus();
     return;
   }
   switch (reason)
   {
   case ModifyReason2026::ParametersConfirmed:
+    appendRuntimeLog("BRANCH parameters confirmed: reapplying parameter patches and game configuration");
     applyParameterPatches();
     applyGameConfiguration(reason);
     break;
   case ModifyReason2026::GameNotification:
   case ModifyReason2026::GameDialogClosed:
+    appendRuntimeLog("BRANCH game event: reapplying game configuration");
     applyGameConfiguration(reason);
     break;
   case ModifyReason2026::TimerTick:
@@ -92,7 +116,8 @@ bool Runtime2026::connectGame(HWND window)
     field<HWND>(san9::layout2026::TargetWindow) = nullptr;
     closeProcess(process);
     field<HANDLE>(san9::layout2026::ProcessHandle) = nullptr;
-    setStatus(RuntimeStatusKind2026::UnsupportedVersion);
+    setStatus(RuntimeStatusKind2026::UnsupportedVersion, "the game build does not match the recovered patch set");
+    appendRuntimeLogFormat("CONNECT rejected: unsupported game version, pid=", field<DWORD>(san9::layout2026::ProcessId));
     return false;
   }
   DWORD oldProtection = 0;
@@ -1426,6 +1451,30 @@ void Runtime2026::applyParameterPatches()
   patchValue = *(_DWORD *)(state + san9::injection2026::WarFogEnabled) != 0;
   writeDescriptor(0x42A780u + 12 * (patchValue), PatchSource2026::CompanionAddress);
   applyComputerWorkTiming();
+  logParameterResults(state);
+}
+
+void Runtime2026::logParameterResults(std::uintptr_t state)
+{
+  // These are the values the game actually receives, not the values the user
+  // typed. Several options are combined with the original value, so only the
+  // combined number can be compared with the game behaviour.
+  const auto oldSlashDead = *(_DWORD *)(state + san9::injection2026::OldSlashDeadCoef);
+  const auto slashDead = *(_DWORD *)(state + san9::injection2026::SlashDeadCoef);
+  const auto blockProp = *(_DWORD *)(state + san9::injection2026::BlockPropCoef);
+  const auto antiLeague = *(_DWORD *)(state + san9::injection2026::AntiPlayerLeagueCoef);
+  const auto npcDisorder = *(_DWORD *)(state + san9::injection2026::NpcAttackDisorder);
+  const auto killerPower = *(_DWORD *)(state + san9::injection2026::KillerPowerCoef);
+  appendRuntimeLogFormat("PARAM RESULT singleSlashDeathCoef input=", slashDead,
+      " original=", oldSlashDead, " written=", oldSlashDead + 4 * slashDead);
+  appendRuntimeLogFormat("PARAM RESULT blockPropCoef input=", blockProp, " written=", 40 - 2 * blockProp);
+  appendRuntimeLogFormat("PARAM RESULT antiLeagueCoef input=", antiLeague,
+      " probabilityCheck=", 4 - (antiLeague >> 2));
+  appendRuntimeLogFormat("PARAM RESULT npcAttackDisorder input=", npcDisorder,
+      " written=", npcDisorder != 0 ? 10 - npcDisorder : 0);
+  appendRuntimeLogFormat("PARAM RESULT killerPowerCoef input=", killerPower);
+  appendRuntimeLogFormat("PARAM RESULT deathGradientThreshold written=",
+      *(_DWORD *)(state + 6596));
 }
 
 void Runtime2026::writeDescriptor(DWORD address, PatchSource2026 source)

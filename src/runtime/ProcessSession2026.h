@@ -45,6 +45,10 @@ public:
     BOOL read(HANDLE process, LPCVOID source, LPVOID target, SIZE_T size);
     BOOL write(HANDLE process, LPVOID target, LPCVOID source, SIZE_T size);
     bool retireExited();
+    // Exit code of the last observed exit. The game process itself is closed
+    // by the time this is read, so the value has to be captured before that.
+    DWORD lastExitCode = 0;
+    bool hasExitCode = false;
     bool canRecover();
     bool restore();
     void beginOperation();

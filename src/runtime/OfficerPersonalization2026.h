@@ -24,6 +24,26 @@ struct OfficerPersonalization2026 {
         9, 9, 9, 9, 9, 9, 9, 9,  0, 0};          // 特殊/设施
     // 游戏原版熟练度上限（1000）。
     static constexpr std::uint16_t DefaultCap = 1000;
+    // 原版「精进」熟练度上限。指示器以此为界区分五角星与圈。
+    static constexpr std::uint16_t RefinedCap = 1500;
+
+    // 兵法系 -> 兵法表技能 id（0..40）。原版武将配置对话框按这 9 系分行，
+    // 每系 3~4 个兵法，0xFF 表示该系没有更多兵法。
+    // 步兵:奋战奋斗奋迅 / 骑兵:突破突进突击 / 弓骑:骑射奔射飞射 /
+    // 弩兵:齐射连射连弩 / 水军:艨艟楼船斗舰 / 攻城:井栏冲车发石象兵 /
+    // 智略:营造石兵破陷教论 / 谋略:混乱陷阱攻心幻术 / 策略:辱骂鼓舞治疗妖术
+    static constexpr std::uint8_t NoSkill = 0xFF;
+    static constexpr std::array<std::array<std::uint8_t, 4>, Systems> systemSkills = {{
+        {{0, 1, 2, NoSkill}},
+        {{3, 4, 5, NoSkill}},
+        {{6, 7, 8, NoSkill}},
+        {{9, 10, 11, NoSkill}},
+        {{12, 13, 14, NoSkill}},
+        {{15, 16, 17, 18}},
+        {{19, 20, 21, 22}},
+        {{23, 24, 25, 26}},
+        {{27, 28, 29, 30}},
+    }};
 
     // 熟练度上限 (per system): 0 = 不修改(用游戏原值 1000), 1..65535 = 该系上限; 默认 1000.
     std::array<std::array<std::uint16_t, Systems>, Count> proficiencyCap{};

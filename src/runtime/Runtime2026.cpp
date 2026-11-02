@@ -1,6 +1,7 @@
 #include "Runtime2026.h"
 #include "../model/PatchImage.h"
 #include "AppPaths.h"
+#include "RuntimeDiagnostics2026.h"
 #include <algorithm>
 #include <cstring>
 #include <chrono>
@@ -145,6 +146,50 @@ void setRuntimeLogTrace(bool enabled) {
                              : "detailed write tracing disabled");
 }
 
+std::string runtimeLogAddress(DWORD address) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setw(8) << std::setfill('0') << address;
+    return out.str();
+}
+
+namespace {
+// The status name appears in every status line, so a reader can follow the
+// session from the log alone without consulting the source.
+const char* statusName(RuntimeStatusKind2026 kind) {
+    switch (kind) {
+    case RuntimeStatusKind2026::None: return "None";
+    case RuntimeStatusKind2026::Connected: return "Connected";
+    case RuntimeStatusKind2026::WaitingForGame: return "WaitingForGame";
+    case RuntimeStatusKind2026::UnsupportedVersion: return "UnsupportedVersion";
+    case RuntimeStatusKind2026::ExitCleanupFailed: return "ExitCleanupFailed";
+    case RuntimeStatusKind2026::ProcessExited: return "ProcessExited";
+    case RuntimeStatusKind2026::IdentityUnavailable: return "IdentityUnavailable";
+    case RuntimeStatusKind2026::RecoveryRequired: return "RecoveryRequired";
+    case RuntimeStatusKind2026::Restored: return "Restored";
+    case RuntimeStatusKind2026::ModificationBlocked: return "ModificationBlocked";
+    case RuntimeStatusKind2026::ModificationRolledBack: return "ModificationRolledBack";
+    case RuntimeStatusKind2026::ExceptionRolledBack: return "ExceptionRolledBack";
+    }
+    return "Unknown";
+}
+}
+
+void Runtime2026::setStatus(RuntimeStatusKind2026 kind) {
+    setStatus(kind, nullptr);
+}
+
+void Runtime2026::setStatus(RuntimeStatusKind2026 kind, const char* reason) {
+    const auto previous = status_.kind;
+    status_ = {};
+    status_.kind = kind;
+    // A repeated status without a new reason carries no information, so it is
+    // not written twice. A repeated status with a reason is still recorded,
+    // because the reason is what explains the transition.
+    if (previous == kind && !reason) return;
+    appendRuntimeLogFormat("STATUS ", statusName(kind), " previous=", statusName(previous),
+        reason ? " reason=" : "", reason ? reason : "");
+}
+
 void Runtime2026::restoreSessionBaseline() {
     speedAllocation_=savedSpeedAllocation_=0;
     appliedSpeed_=savedAppliedSpeed_=1;
@@ -172,14 +217,19 @@ void Runtime2026::restoreSessionBaseline() {
 }
 bool Runtime2026::retireExitedProcess() {
     if (!resumeSpeedThreads()) return false;
+    const DWORD pid = process_.state().identity.pid;
     if (!process_.retireExited()) {
         if (process_.state().recoveryFailure.operation == RuntimeOperation2026::CloseExitedProcess)
-            setStatus(RuntimeStatusKind2026::ExitCleanupFailed);
+            setStatus(RuntimeStatusKind2026::ExitCleanupFailed, "close handle of exited process failed");
         return false;
     }
+    // The exit code tells a normal shutdown apart from a crash. The handle is
+    // already closed here, so the code was captured by the session.
+    if (process_.hasExitCode)
+        san9::recordProcessExit(pid, process_.lastExitCode);
     restoreSessionBaseline();
     undoPending_ = false;
-    setStatus(RuntimeStatusKind2026::ProcessExited);
+    setStatus(RuntimeStatusKind2026::ProcessExited, "game process exited");
     return true;
 }
 HANDLE Runtime2026::openProcess(DWORD access, BOOL inherit, DWORD pid) {
@@ -210,13 +260,13 @@ bool Runtime2026::reverseChanges() {
         const auto operation = process_.state().recoveryFailure.operation;
         setStatus(operation == RuntimeOperation2026::VerifyProcess ? RuntimeStatusKind2026::IdentityUnavailable
             : operation == RuntimeOperation2026::CloseExitedProcess ? RuntimeStatusKind2026::ExitCleanupFailed
-            : RuntimeStatusKind2026::RecoveryRequired);
+            : RuntimeStatusKind2026::RecoveryRequired, "rollback could not complete");
         return false;
     }
     if (process_.state().result == OperationResult2026::ProcessExited) {
         restoreSessionBaseline();
         undoPending_ = false;
-        setStatus(RuntimeStatusKind2026::ProcessExited);
+        setStatus(RuntimeStatusKind2026::ProcessExited, "game exited during rollback");
     }
     return true;
 }
@@ -225,7 +275,7 @@ bool Runtime2026::retryRollback() {
     if (process_.state().process && observeProcess() == ProcessState2026::Exited) return retireExitedProcess();
     if (process_.state().phase != SessionPhase2026::RecoveryRequired) return true;
     if (!process_.canRecover()) {
-        setStatus(RuntimeStatusKind2026::IdentityUnavailable);
+        setStatus(RuntimeStatusKind2026::IdentityUnavailable, "original process identity cannot be confirmed");
         return false;
     }
     if (!pauseSpeedThreads()) { resumeSpeedThreads(); return false; }
@@ -240,7 +290,7 @@ bool Runtime2026::retryRollback() {
     process_.state().phase = process_.state().process ? SessionPhase2026::Active : SessionPhase2026::Idle;
     process_.state().result = undoPending_ ? OperationResult2026::Undone : OperationResult2026::RolledBack;
     undoPending_ = false;
-    setStatus(RuntimeStatusKind2026::Restored);
+    setStatus(RuntimeStatusKind2026::Restored, "rollback finished");
     return true;
 }
 void Runtime2026::modify(ModifyReason2026 reason) {
@@ -309,6 +359,19 @@ void Runtime2026::applyDeathGradient() {
         writePatch(reinterpret_cast<LPVOID>(0x50266Du), &slopeOriginal, 1u);
         writePatch(reinterpret_cast<LPVOID>(0x502677u), &capOriginal, 1u);
     }
+    // The computed chance is the part the user has to verify, so the whole
+    // curve is written out with the values the game will use.
+    appendRuntimeLogFormat("DEATH GRADIENT: enabled=", enabled ? "yes" : "no",
+        " lowRate=", lowRate, " threshold=", threshold);
+    if (enabled) {
+        // The patched code computes min(lowRate, threshold - MAX) and the game
+        // clamps the result at zero. The log lists the same values.
+        for (unsigned max = 0; max <= threshold + 10u; max += 10u) {
+            const unsigned raw = threshold > max ? threshold - max : 0u;
+            const unsigned chance = raw < lowRate ? raw : lowRate;
+            appendRuntimeLogFormat("DEATH GRADIENT maxAbility=", max, " chance=", chance, "%");
+        }
+    }
 }
 void Runtime2026::applyGrowthBoost() {
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
@@ -347,6 +410,8 @@ void Runtime2026::applyGrowthBoost() {
     if (!any || growthBoost_.multiplier <= 1) {
         const BYTE original[6] = {0x89, 0x44, 0x24, 0x04, 0xEB, 0xBC};
         writePatch(reinterpret_cast<LPVOID>(codeBlockTail), original, sizeof(original));
+        appendRuntimeLogFormat("GROWTH BOOST: inactive (officers=0 or multiplier=1), original code restored at ",
+            runtimeLogAddress(codeBlockTail));
         return;
     }
 
@@ -409,6 +474,8 @@ void Runtime2026::applyCultivate() {
     //   ⚠️ 未验证地址：PE 内零引用、无指针指向、位于 .data BSS；
     //     若实机再崩，先删这行
     writePatch(reinterpret_cast<LPVOID>(0x14FA656u), &duration, 1u);
+    appendRuntimeLogFormat("CULTIVATE: enabled=", enabled ? "yes" : "no",
+        " durationRounds=", unsigned(duration), " written at 0x014FA656 (unverified address)");
     // This function no longer writes a 小兵 activation flag.  The former write
     // to 0x6613EE was the root cause of crash #4: 0x6613EE is byte index 2 of
     // the id dword at 0x6613EC (value 0x000003E8, id 1000), so writing 1 there
@@ -428,16 +495,22 @@ void Runtime2026::applyProficiencyCap() {
     // 每武将每系熟练度上限 (uint16[800][9]) 扁平化为字节。
     std::array<std::uint8_t, 800 * 9 * 2> capFlat{};
     bool any = false;
+    size_t customCount = 0;
     for (size_t o = 0; o < 800; ++o)
         for (size_t s = 0; s < 9; ++s) {
             const std::uint16_t v = personalization_.proficiencyCap[o][s];
             capFlat[(o * 9 + s) * 2] = static_cast<std::uint8_t>(v);
             capFlat[(o * 9 + s) * 2 + 1] = static_cast<std::uint8_t>(v >> 8);
-            if (v != 0 && v != OfficerPersonalization2026::DefaultCap) any = true;
+            if (v != 0 && v != OfficerPersonalization2026::DefaultCap) {
+                any = true;
+                ++customCount;
+            }
         }
     if (!any) {
         // 无自定义上限：写回原游戏逻辑（含重定位后的熟练度表访问），避免 uploadInjectionPayloads 晚于本函数覆盖。
         writePatch(reinterpret_cast<LPVOID>(capAddr), &global<DWORD>(0x4256B8), 0x5Du);
+        appendRuntimeLogFormat("PROFICIENCY CAP: no custom limit, original game logic restored at ",
+            runtimeLogAddress(capAddr));
         return;
     }
 
@@ -450,7 +523,10 @@ void Runtime2026::applyProficiencyCap() {
 
     const size_t capSize = capFlat.size();
     const auto region = allocateMemory(process, nullptr, capSize, MEM_COMMIT, PAGE_READWRITE);
-    if (!region) return;
+    if (!region) {
+        appendRuntimeLog("PROFICIENCY CAP: allocation of the limit table failed");
+        return;
+    }
     const DWORD capArr = reinterpret_cast<DWORD>(region);
     writePatch(reinterpret_cast<LPVOID>(capArr), capFlat.data(), capFlat.size());
 
@@ -458,38 +534,139 @@ void Runtime2026::applyProficiencyCap() {
     std::memcpy(bytes, code, sizeof(code));
     std::memcpy(bytes + 0x3D, &capArr, 4);  // movzx eax, word [capArr + eax*2] 的 disp32
     writePatch(reinterpret_cast<LPVOID>(capAddr), bytes, sizeof(bytes));
+
+    appendRuntimeLogFormat("PROFICIENCY CAP: installed at ", runtimeLogAddress(capAddr),
+        " table=", runtimeLogAddress(capArr), " entries=", customCount,
+        " tableBytes=", capSize, " codeSize=", sizeof(code), " code=", hexBytes(bytes, sizeof(bytes)));
+    // The per-officer overrides are the evidence the user asked for, so each
+    // non-default limit is listed with its officer and system index.
+    for (size_t o = 0; o < 800; ++o)
+        for (size_t s = 0; s < 9; ++s) {
+            const std::uint16_t v = personalization_.proficiencyCap[o][s];
+            if (v == 0 || v == OfficerPersonalization2026::DefaultCap) continue;
+            appendRuntimeLogFormat("PROFICIENCY CAP officer=", o, " system=", s, " limit=", v);
+        }
+}
+
+void Runtime2026::logPersonalizationSummary() {
+    // The user asked for a detailed trail of every personalization value, so
+    // each configured officer is listed with all of its values. Officers that
+    // keep every default are only counted, not listed.
+    size_t activationCount = 0, criticalCount = 0, powerCount = 0, intervalCount = 0, capCount = 0;
+    for (size_t o = 0; o < OfficerPersonalization2026::Count; ++o) {
+        if (personalization_.activationBoost[o]) ++activationCount;
+        if (personalization_.criticalHit[o]) ++criticalCount;
+        if (personalization_.powerPercent[o]) ++powerCount;
+        for (size_t s = 0; s < OfficerPersonalization2026::Systems; ++s)
+            if (personalization_.proficiencyCap[o][s] != 0 &&
+                personalization_.proficiencyCap[o][s] != OfficerPersonalization2026::DefaultCap) ++capCount;
+        for (size_t s = 0; s < OfficerPersonalization2026::Skills; ++s)
+            if (personalization_.interval[o][s] != OfficerPersonalization2026::defaultInterval[s]) ++intervalCount;
+    }
+    appendRuntimeLogFormat("PERSONALIZATION summary: activationBoost=", activationCount,
+        " criticalHit=", criticalCount, " powerPercent=", powerCount,
+        " proficiencyCap=", capCount, " interval=", intervalCount);
+
+    for (size_t o = 0; o < OfficerPersonalization2026::Count; ++o) {
+        std::ostringstream line;
+        line << "PERSONALIZATION officer=" << o;
+        bool any = false;
+        if (personalization_.activationBoost[o]) {
+            line << " activationBoost=1";
+            any = true;
+        }
+        if (personalization_.criticalHit[o]) {
+            line << " criticalHit=1";
+            any = true;
+        }
+        if (personalization_.powerPercent[o]) {
+            line << " powerPercent=" << unsigned(personalization_.powerPercent[o]);
+            any = true;
+        }
+        for (size_t s = 0; s < OfficerPersonalization2026::Systems; ++s) {
+            const auto value = personalization_.proficiencyCap[o][s];
+            if (value == 0 || value == OfficerPersonalization2026::DefaultCap) continue;
+            line << " cap[" << s << "]=" << value;
+            any = true;
+        }
+        for (size_t s = 0; s < OfficerPersonalization2026::Skills; ++s) {
+            const auto value = personalization_.interval[o][s];
+            if (value == OfficerPersonalization2026::defaultInterval[s]) continue;
+            line << " interval[" << s << "]=" << unsigned(value);
+            any = true;
+        }
+        if (!any) continue;
+        appendRuntimeLog(line.str().c_str());
+    }
 }
 
 void Runtime2026::applyOfficerPersonalization() {
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
     if (!process) return;
 
-    // 提升兵法发动机会把握概率：hook 0x4FEB90（`mov esi,0xA`，esi 此时仍是单位对象）。
-    // stub 先保存单位到 callee-saved ebx，重放 `mov esi,0xA; call [0x5FF2F0]; add esp,0xC`，
-    // 再沿单位 +0x30 → CPersonData → word[+4] 取武将索引查 activationBoost；命中则 eax=1。
-    // 返回 0x4FEB9E（原 `test eax,eax` 之后的清栈分支）。
-    const BYTE boostOriginal[5] = {0xBE, 0x0A, 0x00, 0x00, 0x00}; // mov esi,0xA
-    const BYTE boostCode[56] = {
-        0x8B, 0xDE,                   // mov ebx, esi
-        0xBE, 0x0A, 0x00, 0x00, 0x00, // mov esi, 0xA
-        0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00, // call [0x5FF2F0]
-        0x83, 0xC4, 0x0C,             // add esp, 0xC
-        0x8B, 0x5B, 0x30,             // mov ebx, [ebx+0x30]
-        0x85, 0xDB,                   // test ebx, ebx
-        0x74, 0x1C,                   // je done
-        0x0F, 0xB7, 0x5B, 0x04,       // movzx ebx, word [ebx+4]
-        0x81, 0xFB, 0x20, 0x03, 0x00, 0x00, // cmp ebx, 0x320
-        0x73, 0x10,                   // jae done
-        0xB9, 0x00, 0x00, 0x00, 0x00, // mov ecx, activationArray
-        0x80, 0x3C, 0x19, 0x00,       // cmp byte [ecx+ebx], 0
-        0x74, 0x05,                   // je done
-        0xB8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
-        0xE9, 0x00, 0x00, 0x00, 0x00  // jmp 0x4FEB9E
+    logPersonalizationSummary();
+
+    // 提升兵法发动机会把握概率。
+    //
+    // 旧版本把 hook 挂在 0x4FEB90（`mov esi,0xA`），那是**抵抗判定**函数的掷骰点
+    // （0x4FEB20：概率 = (对手值 − 我方熟练度) / 10），并且把结果强制成 eax=1。
+    // 由于 eax≠0 表示抵抗成立，这等于让勾选了该项的武将**必定被抵挡，且熟练度
+    // 完全不参与判定**——这正是"熟练度高的人发动兵法却被熟练度低的人抵挡"的成因。
+    // 同时，真正的发动判定从未被 hook，所以"把握概率"勾选后也完全没有效果。
+    //
+    // 现在把握概率改挂到发动判定上：0x4FEBB0 内的 0x4FEC5C 处，概率参数由
+    // `100 + 随机抖动` 算出（基准 100%，会偶尔失手），失败即 return 0（不发动）。
+    // 命中时把该概率参数改成 100，即"把握概率 100%"（与原版作弊器手册一致）。
+    // 抵抗判定保持原版不变，熟练度照常参与。
+    const BYTE staleResistOriginal[5] = {0xBE, 0x0A, 0x00, 0x00, 0x00}; // mov esi,0xA
+    writePatch(reinterpret_cast<LPVOID>(0x4FEB90u), staleResistOriginal, sizeof(staleResistOriginal));
+    appendRuntimeLogFormat("personalization activationBoost: resist roll restored at ",
+        runtimeLogAddress(0x4FEB90u), " (previous build hooked the wrong roll)");
+
+    // hook 0x4FEC59（`push 0xB; push edx; call ebp`）：这是**发动**判定那一枚骰子。
+    // 0x4FEBB0 先按武将的「兵法發動率」属性算出概率（基准 100，再叠加随机抖动，
+    // 见 0x4FEC2B..0x4FEC55 的 `lea edx,[edx+ecx+0x64]`），然后在 0x4FEC5C 掷骰；
+    // 掷骰失败（eax==0）时 0x4FEBB0 直接 `xor eax,eax` 返回 0，兵法根本不发动。
+    // 所以"把握概率 100%"= 让这一枚骰子必定成功。
+    //
+    // stub 沿 esi（发动单位）→ [+0x30] CPersonData → word[+4] 取武将索引查
+    // activationBoost；命中则跳过掷骰、直接把 eax 置 1（必定发动）；未命中则原样
+    // 重放 `push 0xB; push edx; call [0x5FF2F0]`。
+    // 返回 0x4FEC5E（`add esp,0x14`，清掉 3 个参数与函数入口的 sub esp,8）。
+    //
+    // 栈账：入口处 [esp]=1（第三个参数，由原版在 0x4FEC53 压入）。两条路径都压入
+    // 0xB 与 edx，调用现场与原版完全一致（参数序：概率、骰种、1）。
+    // 栈账（关键）：kakuritsu 是 __cdecl（导出名 ?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z，
+    // YAH 即 cdecl），由调用方清参数。原版 0x4FEC5E 的 `add esp,0x14`（20 字节）
+    // 恰好清掉 5 个压栈：push eax(0x4FEC25) + push ebp(0x4FEC30) + push 1(0x4FEC53)
+    // + push 0xB + push edx（后两个正是 kakuritsu 的参数）。
+    // 所以"命中"路径必须照原版压入 0xB 与 edx（虽然不掷骰），才能让 0x4FEC5E 的
+    // add esp,0x14 清到的正好是那 20 字节——多压/少压都会破坏栈平衡。
+    const BYTE boostOriginal[5] = {0x6A, 0x0B, 0x52, 0xFF, 0xD5}; // push 0xB; push edx; call ebp
+    const BYTE boostCode[58] = {
+        0x8B, 0xCE,                    // 00 mov ecx, esi          发动单位
+        0x8B, 0x41, 0x30,              // 02 mov eax, [ecx+0x30]   CPersonData
+        0x85, 0xC0,                    // 05 test eax, eax
+        0x74, 0x23,                    // 07 je normal(0x2C)
+        0x0F, 0xB7, 0x40, 0x04,        // 09 movzx eax, word [eax+4]  武将索引
+        0x3D, 0x20, 0x03, 0x00, 0x00,  // 0D cmp eax, 0x320
+        0x73, 0x18,                    // 12 jae normal(0x2C)
+        0xB9, 0x00, 0x00, 0x00, 0x00,  // 14 mov ecx, activationArray (imm32@0x15)
+        0x80, 0x3C, 0x08, 0x00,        // 19 cmp byte [eax+ecx], 0
+        0x74, 0x0D,                    // 1D je normal(0x2C)
+        0x6A, 0x0B,                    // 1F push 0xB              命中：参数栈与原版一致
+        0x52,                          // 21 push edx              概率参数
+        0xB8, 0x01, 0x00, 0x00, 0x00,  // 22 mov eax, 1           跳过掷骰，直接成功
+        0xE9, 0x00, 0x00, 0x00, 0x00,  // 27 jmp 0x4FEC5E (rel32@0x28)
+        0x6A, 0x0B,                    // 2C normal: push 0xB
+        0x52,                          // 2E push edx
+        0xFF, 0x15, 0xF0, 0xF2, 0x5F, 0x00, // 2F call [0x5FF2F0]  原样掷骰
+        0xE9, 0x00, 0x00, 0x00, 0x00  // 35 jmp 0x4FEC5E (rel32@0x36)
     };
-    installPerOfficerHook(process, personalization_.activationBoost, 0x4FEB90u,
-                          boostOriginal, sizeof(boostOriginal), 0x4FEB9Eu,
-                          boostCode, sizeof(boostCode), 0x24,
-                          "activationBoost");
+    installPerOfficerHook(process, personalization_.activationBoost, 0x4FEC59u,
+                          boostOriginal, sizeof(boostOriginal), 0x4FEC5Eu,
+                          boostCode, sizeof(boostCode), 0x15,
+                          "activationBoost", 0x28);
 
     // 兵法威力一定加倍(出动画)：hook 0x50603B（`add esp,0xC; test eax,eax`）。
     // stub 沿 [esi+0x80] → [+0x88] 链表逐节点取 CPersonData → word[+4] 查 criticalHit；
@@ -715,7 +892,7 @@ bool Runtime2026::runOperation(const std::function<void()>& operation) {
     if (process_.state().phase == SessionPhase2026::Applying || process_.state().phase == SessionPhase2026::RollingBack)
         return false;
     if (process_.state().phase == SessionPhase2026::RecoveryRequired) {
-        setStatus(RuntimeStatusKind2026::ModificationBlocked);
+        setStatus(RuntimeStatusKind2026::ModificationBlocked, "an unfinished rollback blocks new modifications");
         return false;
     }
     savedState_ = state_;
@@ -735,6 +912,7 @@ bool Runtime2026::runOperation(const std::function<void()>& operation) {
         process_.state().journal.commit();
         process_.state().phase = process_.state().process ? SessionPhase2026::Active : SessionPhase2026::Idle;
         process_.state().result = OperationResult2026::Committed;
+        appendRuntimeLogFormat("MODIFY committed entries=", process_.state().journal.entries().size());
     } catch (const ProcessOperationFailure2026&) {
         {
             std::ostringstream line;
@@ -748,27 +926,38 @@ bool Runtime2026::runOperation(const std::function<void()>& operation) {
         process_.state().phase = SessionPhase2026::RecoveryRequired;
         retryRollback();
         if (process_.state().result == OperationResult2026::RolledBack)
-            setStatus(RuntimeStatusKind2026::ModificationRolledBack);
+            setStatus(RuntimeStatusKind2026::ModificationRolledBack, "the operation failed and was rolled back");
     } catch (...) {
         process_.state().failure = {RuntimeOperation2026::RuntimeException};
         appendRuntimeLog("modify exception (unknown), rolled back");
         process_.state().phase = SessionPhase2026::RecoveryRequired;
         retryRollback();
         if (process_.state().result == OperationResult2026::RolledBack)
-            setStatus(RuntimeStatusKind2026::ExceptionRolledBack);
+            setStatus(RuntimeStatusKind2026::ExceptionRolledBack, "an unknown exception was rolled back");
     }
     if (!resumeSpeedThreads()) return false;
     return process_.state().result == OperationResult2026::Committed;
 }
 bool Runtime2026::undo() {
+    appendRuntimeLog("UNDO requested");
     if (process_.state().process && observeProcess() == ProcessState2026::Exited) return retireExitedProcess();
-    if (!retryRollback()) return false;
-    if (process_.state().journal.empty()) { process_.state().result = OperationResult2026::Undone; return true; }
+    if (!retryRollback()) {
+        appendRuntimeLog("UNDO failed: the rollback could not be completed");
+        return false;
+    }
+    if (process_.state().journal.empty()) {
+        process_.state().result = OperationResult2026::Undone;
+        appendRuntimeLog("UNDO finished: nothing to restore");
+        return true;
+    }
     savedState_ = initialState_; savedData_ = initialData_;
     process_.state().journal.restoreAll();
     undoPending_ = true;
     process_.state().phase = SessionPhase2026::RecoveryRequired;
-    return retryRollback();
+    const bool done = retryRollback();
+    appendRuntimeLog(done ? "UNDO finished: the session was restored"
+                          : "UNDO incomplete: the journal still holds pending changes");
+    return done;
 }
 
 static_assert(sizeof(void*) == 4, "2026 runtime requires Win32");

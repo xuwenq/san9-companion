@@ -176,6 +176,13 @@ BOOL ProcessSession2026::write(HANDLE process, LPVOID target, LPCVOID source, SI
 }
 bool ProcessSession2026::retireExited() {
     if (observe() != ProcessState2026::Exited) return false;
+    // The exit code separates a clean exit from a crash. It has to be read
+    // before the handle is closed, otherwise the information is lost.
+    DWORD exitCode = 0;
+    if (api_.exitCode(state_.process, &exitCode)) {
+        lastExitCode = exitCode;
+        hasExitCode = true;
+    }
     if (!api_.closeHandle(state_.process)) {
         const DWORD error = GetLastError();
         state_.phase = SessionPhase2026::RecoveryRequired;

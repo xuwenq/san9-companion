@@ -74,6 +74,7 @@ enum class BarrierFault { None, Snapshot, Open, Suspend, Context, Resume };
 BarrierFault barrierFault=BarrierFault::None;
 bool processAlive=true, identityAvailable=true;
 DWORD processPid=123, windowPid=123, processCreated=1, windowHandle=42;
+DWORD processExitCode=0;
 size_t exitAfterRead=0;
 std::function<void()> writeCallback;
 enum class Fault { None, Open, Read, Write, Flush, Query, Protect, Allocate, Release, Close, Resolve, Message, Count };
@@ -108,6 +109,10 @@ BOOL WINAPI processTimes(HANDLE,LPFILETIME created,LPFILETIME,LPFILETIME,LPFILET
 DWORD WINAPI waitProcess(HANDLE,DWORD timeout) {
     check(timeout==0,"liveness check never blocks");
     return processAlive?WAIT_TIMEOUT:WAIT_OBJECT_0;
+}
+BOOL WINAPI exitCode(HANDLE,LPDWORD code) {
+    if(!identityAvailable) return FALSE;
+    *code=processExitCode;return TRUE;
 }
 HANDLE WINAPI openProcess(DWORD access,BOOL,DWORD) {
     check((access&PROCESS_QUERY_INFORMATION)!=0,"query access requested for protection regions");
@@ -224,7 +229,7 @@ BOOL WINAPI moduleFirst(HANDLE,LPMODULEENTRY32W entry) {
 BOOL WINAPI moduleNext(HANDLE,LPMODULEENTRY32W) { SetLastError(ERROR_NO_MORE_FILES); return FALSE; }
 ProcessApi2026 api() {
     return {findWindow,windowProcess,openProcess,closeHandle,allocate,release,protect,read,write,flush,registerMessage,query,
-        processId,processTimes,waitProcess,snapshot,threadFirst,threadNext,openThread,suspendThread,resumeThread,
+        processId,processTimes,exitCode,waitProcess,snapshot,threadFirst,threadNext,openThread,suspendThread,resumeThread,
         threadContext,moduleFirst,moduleNext};
 }
 void store(DWORD address,DWORD value) {
@@ -1190,6 +1195,56 @@ void personalizationConfigTest() {
     }
     std::puts("Personalization format, invalid input and round-trip checks passed.");
 }
+// The proficiency marker in the officer dialog shows the four states the user
+// asked for: nothing at the default cap of 1000, a star between 1000 and 1500,
+// a circle above 1500 and a ring when an activation interval was shortened.
+void proficiencyMarkerTest() {
+    // The marker rule is a pure function of the officer's personalization
+    // record, so it is verified here without a game process.
+    const auto mark=[](const OfficerPersonalization2026 &config, size_t officer, size_t system) -> std::wstring {
+        bool shortened=false;
+        for (auto skill : OfficerPersonalization2026::systemSkills[system]) {
+            if (skill==OfficerPersonalization2026::NoSkill) break;
+            if (config.interval[officer][skill]<OfficerPersonalization2026::defaultInterval[skill]) {
+                shortened=true;break;
+            }
+        }
+        if (shortened) return L"○";
+        const auto cap=config.proficiencyCap[officer][system];
+        if (cap==0 || cap==OfficerPersonalization2026::DefaultCap) return {};
+        if (cap>OfficerPersonalization2026::RefinedCap) return L"◎";
+        return L"★";
+    };
+    OfficerPersonalization2026 config;
+    check(mark(config,0,0).empty(),"default proficiency cap shows no marker");
+    config.proficiencyCap[0][0]=1200;
+    check(mark(config,0,0)==L"★","cap between 1000 and 1500 shows a star");
+    config.proficiencyCap[0][0]=1500;
+    check(mark(config,0,0)==L"★","cap of exactly 1500 still shows a star");
+    config.proficiencyCap[0][0]=1600;
+    check(mark(config,0,0)==L"◎","cap above 1500 shows a circle");
+    config.proficiencyCap[0][0]=0;
+    check(mark(config,0,0).empty(),"a zero cap means unmodified and shows no marker");
+    // 步兵系 is skill 0..2; the default interval of skill 0 is 9 days.
+    config.interval[0][0]=3;
+    check(mark(config,0,0)==L"○","a shortened interval shows a ring");
+    config.interval[0][0]=9;
+    check(mark(config,0,0).empty(),"restoring the interval clears the ring");
+    // The ring belongs to the system that owns the shortened skill, not to
+    // every system: skill 2 is still 步兵, skill 3 starts 骑兵.
+    config.interval[0][2]=0;
+    check(mark(config,0,0)==L"○","a shortened second skill of the same system shows a ring");
+    check(mark(config,0,1).empty(),"another system is not affected by the ring");
+    // The system table must cover every skill up to 30; 31..40 are the
+    // special skills that belong to no system.
+    std::array<bool,OfficerPersonalization2026::Skills> covered{};
+    for (size_t s=0;s<OfficerPersonalization2026::Systems;++s)
+        for (auto skill : OfficerPersonalization2026::systemSkills[s])
+            if (skill!=OfficerPersonalization2026::NoSkill) covered[skill]=true;
+    for (size_t k=0;k<31;++k)
+        check(covered[k],"every skill up to 30 belongs to a system");
+    std::puts("Proficiency marker states, system mapping and ring scope checks passed.");
+}
 // The four per-officer injection blocks derive the officer index from the
 // person record itself: "movzx reg, word [ptr+4]" (CPersonData.id, the
 // person-table index 0..849). The broken 2019-era derivation used
@@ -1227,7 +1282,7 @@ void injectionCodeBytesTest() {
     };
     const Block blocks[]={
         {"growth multiplier",40,0x02,4,{0x0F,0xB7,0x46,0x04},0x02,{0x0F,0xB7,0x46,0x04}},
-        {"activation boost",56,0x17,6,{0x0F,0xB7,0x5B,0x04,0x81,0xFB},0x17,{0x0F,0xB7,0x5B,0x04}},
+        {"activation boost",58,0x09,6,{0x0F,0xB7,0x40,0x04,0x3D,0x20},0x09,{0x0F,0xB7,0x40,0x04}},
         {"critical hit",84,0x1F,4,{0x0F,0xB7,0x40,0x04},0x1F,{0x0F,0xB7,0x40,0x04}},
         {"skill interval",77,0x0F,6,{0x0F,0xB7,0x4E,0x04,0x81,0xF9},0x0F,{0x0F,0xB7,0x4E,0x04}}
     };
@@ -1981,6 +2036,7 @@ int main(int argc, char** argv) {
             {"--computer-work-timing",computerWorkTimingTest},
             {"--game-text",gameTextTest},{"--person-snapshot",personSnapshotTest},
             {"--lifecycle",lifecycleTest},{"--personalization",personalizationConfigTest},
+            {"--proficiency-marker",proficiencyMarkerTest},
             {"--injection-code-bytes",injectionCodeBytesTest},
             {"--disabled-original-block",disabledOriginalToolBlockTest},
             {"--id-table-write-guard",idTableWriteGuardTest}
@@ -2031,7 +2087,7 @@ int main(int argc, char** argv) {
         if(configurationsRequested) {
             presentationSpeedRuntimeTest();
             configFilesTest(); controllerTest(configRoot);
-            coreBoundaryTest();gameSnapshotsTest();appPathsTest();stateBoundsTest();imageBoundsTest();gameTextTest();personSnapshotTest();siegeSelectionTest();computerWorkTimingTest();personalizationConfigTest();injectionCodeBytesTest();disabledOriginalToolBlockTest();idTableWriteGuardTest();
+            coreBoundaryTest();gameSnapshotsTest();appPathsTest();stateBoundsTest();imageBoundsTest();gameTextTest();personSnapshotTest();siegeSelectionTest();computerWorkTimingTest();personalizationConfigTest();proficiencyMarkerTest();injectionCodeBytesTest();disabledOriginalToolBlockTest();idTableWriteGuardTest();
             for(const auto& entry:configurations) entry.run((configRoot/entry.file).string().c_str());
         }
     } catch(const std::exception& error) {

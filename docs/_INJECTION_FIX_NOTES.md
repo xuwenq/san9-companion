@@ -11,7 +11,7 @@
 | 崩溃根因 | 四个注入块都用 `(esi - 0x1258EE0) / 0x128` 算武将索引，但 `esi` **从不是**武将表指针 → 野指针读 → 必崩（B1） |
 | 正确的武将索引 | `movzx eax, word [CPersonData + 4]` —— 即 `word[记录+4]` 的低 16 位 |
 | 该索引的含义 | **就是武将表 `0x1258EE0` 的下标**（= 项目 UI 用的武将索引，0..799） |
-| 把握概率 hook 点 | 必须从 `0x4FEB95` 移到 `0x4FEB90`（后者 esi 才是单位对象） |
+| 把握概率 hook 点 | **必须从 `0x4FEB95` 移到 `0x4FEB90`（后者 esi 才是单位对象）** —— ⚠️ 2026-11-02 更正：这是**抵抗骰**，`eax≠0` 表示**抵抗成立**；把握概率应挂在**发动骰** `0x4FEC59`，`0x4FEB90` 须恢复原版字节（见 §14） |
 | 间隔 hook 点 | 应 hook `0x4FF08B`（`idiv ecx`），**不能**覆盖后面的 `push eax` / `call 0x4FB760` |
 | 兵法表条目数 | **41**（`0x453720`: `cmp eax,0x29`），`SkillConfig::Count=39` 是错的（B6） |
 | 武将表条目数 | 850（`0x4531B0`: `cmp eax,0x352`），但**存档只装载前 800**（`0x45415B`: `cmp edi,0x320`） |
@@ -344,6 +344,9 @@ loop: ... add ebx, 0x8C; cmp edi, 0x29; jl loop    ; ★ 41 条
 
 > 2026-10-27 更新：下面 1、3 两条的**实现决策已定并落地**（见 §11）；
 > 2、4 两条仍需实机验证。
+>
+> 2026-11-02 更新：§11.2「把握概率 hook `0x4FEB90`」的**实现决策已作废并被推翻**——
+> `0x4FEB90` 是**抵抗骰**而非发动判定。详见 §14。
 
 1. **间隔「天」↔ 兵法记录 `+0x7C` 内值 的换算**。
    **已在 §11.4 落地决策**：本项目 `interval[800][41]` 存的就是「发动间隔(天)」，
@@ -386,6 +389,9 @@ FF 25 F0 F2 5F 00        jmp  [0x5FF2F0]         ; 尾部跳进原 API
 ```
 
 ### 11.2 把握概率（hook `0x4FEB90`，原 `mov esi,0xA` 5 字节）
+
+> ⚠️ **2026-11-02：本节实现已作废并被推翻**（见 §14）。`0x4FEB90` 是**抵抗判定**，
+> 把握概率已迁移到发动判定骰 `0x4FEC59`。以下保留为历史记录。
 
 56 字节桩：`mov ebx,esi` 保存单位 → 重放 `mov esi,0xA; call [0x5FF2F0]; add esp,0xC`
 → 沿 `[ebx+0x30]`（CPersonData*）→ `word[+4]` 查 `activationBoost`，
@@ -595,3 +601,107 @@ id 表 A 首条记录的 **id dword `0x6613EC`（值 `0x000003E8`）的第 2 个
 「禁用 `unk_42C894` 即消除 `0x5B6754` 崩溃」**是错的**——12:48 的 dump 证明
 **禁用之后仍然崩在同一地址**。禁用 `unk_42C894` 本身仍然正确
 （它修复的是崩溃 #3 的返回值契约问题），只是与 `0x5B6754` 无关。
+
+---
+
+## 14. 兵法抵挡 bug 与把握概率不生效：两枚骰子挂错了（2026-11-02）
+
+### 14.1 现象（用户报告的两个症状）
+
+1. 「兵法抵挡似乎有 bug；经常出现**熟练度很高的人发动兵法时被熟练度低的人抵挡**」
+2. 「**兵法发动概率这个设置也是没有生效的**，有武将设置了这个但是没有起效果」
+
+### 14.2 根因：游戏里有两枚独立的骰子
+
+| 骰子 | 所在函数 | 掷骰点 | 概率 | 结果语义 |
+| --- | --- | --- | --- | --- |
+| **抵抗骰** | `0x4FEB20` | `0x4FEB95` | (对手值 − 我方熟练度) / 10 | **eax≠0 ⇒ 抵抗成立** |
+| **发动骰** | `0x4FEBB0` | `0x4FEC5C` | 100 + 随机抖动 | 失败 ⇒ `xor eax,eax` ⇒ 返回 0 ⇒ 兵法不发动 |
+
+抵抗骰现场：
+
+```
+0x4FEB8D: push 0xB
+0x4FEB8F: push edx
+0x4FEB90: mov esi, 0xA          ; ★ 旧 hook 点
+0x4FEB95: call [0x5FF2F0]        ; ★ 掷骰
+0x4FEB9E: test eax, eax
+0x4FEB9E+?: mov esi, 1           ; eax≠0 ⇒ esi=1 = 抵抗成立
+```
+
+抵抗骰的唯一调用点是 `0x5066A1`，结果在 `0x506838` 被消费
+（`cmp edi,1 / setg dl`）。
+
+发动骰现场：
+
+```
+0x4FEC53: push 1
+0x4FEC59: push 0xB              ; ★ 新 hook 点
+0x4FEC5B: push edx
+0x4FEC5C: call ebp              ; ★ 掷骰（kakuritsu）
+0x4FEC5E: add esp, 0x14         ; ★ 清 5 个压栈
+0x4FEC61: test eax, eax
+0x4FEC65: xor eax, eax          ; 失败 ⇒ 返回 0 ⇒ 不发动
+```
+
+### 14.3 旧实现为什么同时造成两个症状
+
+旧实现把把握概率 hook 挂在 **`0x4FEB90`（抵抗骰）** 并强制 `eax=1`。
+由于「eax≠0」在抵抗骰里表示「**抵抗成立**」，
+所以「勾选把握概率 ⇒ 该武将**必定被抵挡**，且**熟练度完全不参与判定**」——症状 ①。
+
+同时真正的发动骰 `0x4FEC5C` 从未被 hook，
+所以「勾选把握概率」这个开关**根本不影响发动判定**——症状 ②。
+
+**一个根因，两个症状。**
+
+### 14.4 修复（`src/runtime/Runtime2026.cpp` `applyOfficerPersonalization()`）
+
+1. 把 `0x4FEB90` **恢复成原版字节** `BE 0A 00 00 00`（`mov esi,0xA`），
+   抵抗判定完全按原版规则走（熟练度照常参与）；
+2. 把握概率改挂到**发动骰 `0x4FEC59`**
+   （`push 0xB; push edx; call ebp`），命中时跳过掷骰、直接 `mov eax,1`，
+   返回 `0x4FEC5E`；未命中则原样重放原调用；
+3. 日志打印 `personalization activationBoost: resist roll restored at 0x...` 作为佐证。
+
+### 14.5 ⚠️ 改这个桩必须遵守的两条约束
+
+**（1）`kakuritsu` 是 `__cdecl`。**
+
+导出名 `?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z` —— `YAH` = cdecl（第一个 `Y` = cdecl、
+`A` = 无修饰、`H` = int 返回）。参数由**调用方**清。
+
+原版 `0x4FEC5E` 的 `add esp,0x14`（20 字节）恰好清掉 5 个压栈：
+
+```
+push eax   (0x4FEC25)
+push ebp   (0x4FEC30)
+push 1     (0x4FEC53)
+push 0xB   (0x4FEC59)
+push edx   (0x4FEC5B)
+```
+
+所以「命中」路径**必须照原版压入 `0xB` 与 `edx`**（虽然不掷骰），
+多压/少压都会破坏栈平衡。
+
+**（2）rel32 字段偏移有两种约定，不要混用。**
+
+| 位置 | 约定 | 本例取值 |
+| --- | --- | --- |
+| C++ `installPerOfficerHook` 的 `extraJumpRelOffset` | **rel32 字段偏移** = E9 操作码偏移 + 1 | `0x28` |
+| `tools/asm_check.py` 的 `rel32={...}` | **E9 操作码偏移** | `0x27` / `0x35` |
+
+两者指向**同一段** rel32 字段，只是约定不同。
+
+### 14.6 桩布局
+
+- 桩大小 58 字节，hook 点 `0x4FEC59`，返回地址 `0x4FEC5E`
+- `arrayAddrOffset = 0x15`
+- `extraJumpRelOffset = 0x28`
+
+### 14.7 验证
+
+- 字节级用 capstone 验证（`tools/asm_check.py`）；
+- `tests/runtime_test.cpp` 的 `injectionCodeBytesTest` 断言新字节、拒绝旧字节；
+- Debug / Release / Publish 三种配置构建通过，`--all assets/config` 与 `--ui-smoke` 均 exit=0；
+- **实机验证仍待用户执行**（见 `docs/HANDOVER.md` §4.8 的验证清单）。

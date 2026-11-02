@@ -20,7 +20,10 @@
 | **注入代码修复** | ✅ **已完成**（2026-10-27）。四个注入块全部重写：武将索引统一 `word[ptr+4]`、hook 点/寻址/覆盖长度全部纠正；`SkillConfig::Count` 39→41。离线测试全绿（含新字节断言） |
 | UI smoke | ✅ **已转绿**（`--ui-smoke` → `exit=0`；根因是 tooltip 返回值误判，§4.1） |
 | 详细日志 | ✅ 已有开关（设置页复选框 / `--log-writes` / `SAN9_LOG_WRITES=1`），见 §4.6 |
-| 试用包 | ✅ `out/trial/` **已重新出包**（2026-11-01，Publish 静态 CRT exe + 6 个配置 + 使用说明），可发给用户 |
+| 试用包 | ✅ `out/trial/` **已重新出包**（2026-11-02，Publish 静态 CRT exe + 6 个配置 + 使用说明），可发给用户 |
+| **兵法抵挡 bug** | ✅ **根因已确认并修复（2026-11-02）**。旧版把「把握概率」错挂在**抵抗骰** `0x4FEB90` 且强制 `eax=1`（该处 eax≠0 即「抵抗成立」）→ 勾选后**必定被抵挡**且熟练度完全不参与；同时真正的发动骰从未被 hook → 勾选也没效果。**一个根因，两个症状**。已恢复 `0x4FEB90` 原版字节，把握概率改挂发动骰 `0x4FEC59`。详见 §4.8 |
+| **熟练度指示图标** | ✅ **已实现（2026-11-02）**。四档：无 / ★（1000<上限≤1500）/ ◎（上限>1500）/ ○（该系有缩短发动间隔，优先级最高）。原版二进制里**没有任何可复用的图标位图**（游戏只有光标位图、2019 工具无位图、原版作弊器的位图是打包加密的），故用宋体 Unicode 字形绘制。详见 §4.9 |
+| **用户手册** | ✅ `docs/用户手册.md` 已写完（9 节，含 56 开关 + 32 数值参数的完整说明） |
 | **注入代码崩溃排查** | ✅ **崩溃 #3 根因已确认并修复**（上一条的禁用桩破坏了原块的返回值契约，§4.5）；329 块全量排查完成，**无新增隐患** |
 | **崩溃 #4（`0x5B6754`）** | ✅ **根因已确认并修复（2026-11-01）**。根因是**我们自己**在 `applyCultivate()` 里写 `0x6613EE`，破坏了 id 表 A 的 id dword `0x6613EC` → 查找失败 → getflag 解引用空指针。已删除该写入 + 新增回归测试 `idTableWriteGuardTest`。详见 §4.7 与 `docs/_CRASH4_HANDOFF_2026-10-31.md` |
 | 待办 | 见 §3.6 建议顺序（剩：**实机验证**（崩溃 #4 修复 + 四类个性化）、威力系数 hook 点、存档路线 RE T1–T4、§12.3 三项遗留） |
@@ -608,6 +611,99 @@ Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\Windows Error Reporting
 > （`San9PKHardDlg.cpp:4261-4265`）、游戏本体反汇编三方一致。
 > **崩溃与该功能无关**，纯粹是 `applyCultivate()` 多写的那一个字节。
 
+### 4.8 兵法抵挡 bug：把握概率挂错了骰子（2026-11-02 已修复）
+
+**用户报告的两条**：
+1. 「兵法抵挡似乎有 bug；经常出现熟练度很高的人发动兵法时被熟练度低的人抵挡的情况」；
+2. 「兵法发动概率这个设置也是没有生效的，有武将设置了这个但是没有起效果」。
+
+**根因（一个，两个症状）**：游戏里有两枚独立的骰子，旧版把「把握概率」挂到了**抵抗骰**上。
+
+| 骰子 | 所在函数 | 掷骰点 | 语义 |
+| --- | --- | --- | --- |
+| **抵抗骰** | `0x4FEB20` | `0x4FEB95` | 概率 = (对手值 − 我方熟练度) / 10；**eax≠0 ⇒ 抵抗成立**；唯一调用者 `0x5066A1`，结果在 `0x506838`（`cmp edi,1 / setg dl`）消费 |
+| **发动骰** | `0x4FEBB0` | `0x4FEC5C` | 概率 = 100 + 随机抖动；失败 ⇒ `0x4FEC61: test eax,eax; jne` → `0x4FEC65: xor eax,eax` 返回 0 ⇒ 兵法不发动 |
+
+旧实现在 `0x4FEB90`（`mov esi,0xA`）挂桩并强制 `eax=1`。因为「eax≠0」在抵抗骰里表示
+「抵抗成立」，所以**勾选把握概率 ⇒ 该武将必定被抵挡，且熟练度完全不参与判定**（症状 1）；
+而真正的发动骰从未被 hook，所以**把握概率勾了也没有任何效果**（症状 2）。
+
+**取证**：`tools/pe_dis.py San9PK.exe 0x4FEB80:0x30` → 原版 `0x4FEB90` = `BE 0A 00 00 00`，
+`0x4FEB9E: test eax,eax` → 非零则 `mov esi,1` = 抵抗成立。
+
+**修复**（`src/runtime/Runtime2026.cpp` `applyOfficerPersonalization()`）：
+
+1. 把 `0x4FEB90` 恢复成 `BE 0A 00 00 00`，抵抗判定完全按原版执行；
+2. 把握概率改挂**发动骰** `0x4FEC59`（`push 0xB; push edx; call ebp`）：
+   沿 `esi`（发动单位）→ `[+0x30]` CPersonData → `word[+4]` 取武将索引查表；
+   命中则跳过掷骰、`mov eax,1`、返回 `0x4FEC5E`；未命中则原样重放原调用；
+3. 日志打印 `personalization activationBoost: resist roll restored at 0x…` 作为佐证。
+
+> ⚠️ **改动此桩时必须遵守的栈账约束**：`kakuritsu` 是 **`__cdecl`**
+> （导出名 `?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z`，`YAH` = cdecl），由调用方清参数。
+> 原版 `0x4FEC5E` 的 `add esp,0x14`（20 字节）恰好清掉 5 个压栈：
+> `push eax`(0x4FEC25) + `push ebp`(0x4FEC30) + `push 1`(0x4FEC53) + `push 0xB` + `push edx`。
+> 所以「命中」路径**必须照原版压入 `0xB` 与 `edx`**（虽然不掷骰），多压/少压都会破坏栈平衡。
+>
+> ⚠️ **rel32 偏移约定有两套，别混用**：
+> - `installPerOfficerHook(..., extraJumpRelOffset)` = **rel32 字段偏移**（E9 操作码偏移 + 1），本桩是 `0x28`；
+> - `tools/asm_check.py` 的 `rel32={off: tgt}` = **E9 操作码偏移**，本桩是 `0x27` / `0x35`。
+>
+> 两者指向同一段 rel32 字段，但写代码时按各自的约定填。
+
+**桩布局**（58 字节）：hook `0x4FEC59` → 返回 `0x4FEC5E`，`arrayAddrOffset=0x15`。
+`tools/asm_check.py` 用 capstone 逐条验证；`tests/runtime_test.cpp` 的
+`injectionCodeBytesTest` 断言 `{"activation boost",58,0x09,6,{0x0F,0xB7,0x40,0x04,0x3D,0x20},…}`。
+
+### 4.9 熟练度指示图标：可复用的图标位图 = 0（2026-11-02 已实现）
+
+**用户原文**：「你告诉我有几个图标可以用，如果数量度上限是1000（默认值）不显示图标，
+如果是1500以下（比如1200），显示一个五角星，如果是1500以上（1600、2000）显示一个圈，
+如果是发动间隔缩短了，则显示一个环。」
+
+**关于「有几个图标可用」的调查结论：可直接复用的图标位图 = 0 个。**
+
+| 载体 | 结论 |
+| --- | --- |
+| 游戏 `San9PK.exe` | 只有 12×10 与 33×11 两个**光标**位图，无可用图标 |
+| 2019 工具 `recovery/sample-2026/San9PKHard.exe` | **没有任何位图资源** |
+| 原版作弊器 `SanIXPKCheat.exe` | 有 25 BITMAP + 17 ICON，但**资源数据打包加密**：暴力 XOR 密钥恢复失败、尺寸暴力枚举有歧义，无法提取 |
+
+**原版指示器的真实语义（与用户描述不同）**：原版武将配置对话框里那 9 个 8×8 控件
+（id 1096–1104，x=196，y=102/117/132/147/162/177/192/207/222，groupbox「精通 熟练度」
+在 `[186,84,57,160]`）**不是图标**，而是 `BS_CHECKBOX` 复选框
+（class ordinal 0x80 = Button，style `0x50010002`）。证据链：
+- `recovery/evidence/decompiled/sub_404C70.c`：`DDX_Check(a2, 1096, …)` … `DDX_Check(a2, 1104, …)`；
+- `tools/reconstruct.py:206`：class ordinal `{0x80:'Button', 0x81:'Edit', 0x82:'Static', …}`。
+
+它们绑定的是武将**逐兵法系的「精通」标志位**，**与熟练度数值无关**：
+`sub_405130.c` 读 byte `this+12352` 的 bit 0–7（= officer+0x36 >> 3）与 word `this+6176` 的 bit 8；
+`sub_409E10.c` 消费这些位去改游戏内存。
+→ **两个原始二进制里都不存在** ★/☆/○/●/◎/环 的字形梯度。
+
+**本作实现**（按用户要求，四档，用宋体 Unicode 字形直接画，无需新增位图资源）：
+
+| 状态 | 判定 | 字形 |
+| --- | --- | --- |
+| 无 | 上限 = 1000（或填 0 = 不修改），且该系无缩短间隔 | — |
+| ★ | 上限 1000 < cap ≤ 1500 | U+2605 |
+| ◎ | 上限 cap > 1500 | U+25CE |
+| ○ | 该系至少一个兵法的发动间隔 < 游戏原值（**优先级最高**） | U+25CB（兼作「环」的近似） |
+
+**兵法系 → 兵法表 id 的权威映射**（依据原版对话框的 9 行布局）：
+步兵 0–2 / 骑兵 3–5 / 弓骑 6–8 / 弩兵 9–11 / 水军 12–14 / 攻城 15–18 /
+智略 19–22 / 谋略 23–26 / 策略 27–30；**31–40 为特殊兵法，不归属任何系**。
+放在 `OfficerPersonalization2026::systemSkills`。
+
+**改动清单**：
+- `assets/ui/resource_ids.h`：`IDC_PROFICIENCY_MARK_1..9`（1252–1260）；
+- `assets/ui/dialogs.rc`：对话框 132 加 9 个 Static（x=336，y=110/125/140/155/170/185/200/215/230）；
+- `src/runtime/OfficerPersonalization2026.h`：`RefinedCap=1500`、`NoSkill=0xFF`、`systemSkills`；
+- `src/app/ui/Pages.cpp`：`PersonPage` 加 `proficiencyMark()` / `refreshProficiencyMarks()` /
+  `isProficiencyMarkSource()` / `updateProficiencyMarkSources()`，`loadPerson()` 后刷新，
+  上限或 27 个间隔输入框 `EN_CHANGE` 时实时刷新；
+- `tests/runtime_test.cpp`：新增 `proficiencyMarkerTest()`，注册进 `--all` 与 `--proficiency-marker`。
+
 ---
 
 ## 5. 构建与测试
@@ -791,3 +887,4 @@ e84ab3c feat(officer): add personalization persistence, design doc and tests
 | 2026-10-31 | **实机第二层崩溃 + 最终禁用 unk_42C894（原工具遗留代码块）**。判空修复（上一条）挡住 `0x9A73` 写空指针后，实机又崩在**游戏自身代码** `0x5B6754`（fault offset `0x001b6754`，= 游戏基址 0x400000+0x1b6754）。反汇编 `0x5B6750`：`mov eax,[esp+4]; movzx eax,byte[eax+0x14]` ← 读空指针 `[0+0x14]`；其调用者 `0x5B72F0`（游戏函数）`call 0x5b7050`(查找)后**未判空**直接 `call 0x5b6750`。**根因**：`unk_42C894`（`writePatch` 到 `allocationBase+0x9A50` 的原工具代码块）在查找 id=0x45a 成功后，把游戏对象 id 字段 `[eax+4]` 污染成 `[0x661140]`（启动早期未初始化值），导致游戏后续用被污染的 id 查找失败 → 空指针连锁崩溃。两次崩溃（0x9A73 写空指针 / 0x5B6754 读空指针）是**同一代码块的两个失败模式**。**最终修复**：按用户决策**禁用该代码块**——把 `writePatch(dword_42F038, &unk_42C894, 0x88u)` 替换为写入安全桩 `unk_42C894_disabled[5]`（`xor eax,eax; ret 4`，匹配原函数 ret 4 调用约定），不再执行任何污染逻辑。该代码块是原工具 SanIXPKCheat 的遗留功能，与四类武将个性化（hook 0x4FEB90/0x4FF08B/0x50603B，在 `applyOfficerPersonalization`）无关。**验证**：Debug 构建 + 离线测试全绿；Publish 构建通过。**实机验证待用户执行**。**⚠️ 2026-10-31 归因更正**：本条把 `0x5B6754` 归因于 `unk_42C894` 污染 id，并声称禁用它即可消除该崩溃——**这一归因已被 12:48 的 dump 证伪**（禁用之后仍然崩在同一地址）。`0x5B6754` 的真正根因见本表后一条「崩溃 #4」条目。禁用 `unk_42C894` 本身仍然正确（它消除了崩溃 #3 的返回值契约问题）。 |
 | 2026-10-31 | **崩溃 #3 根因确认并修复（上一条的「修复」本身就是崩溃源）+ 全量排查完成**。实机崩溃 #3：异常地址 `0x45C8A0`、读取地址 `0x28`（异常信息 `ExceptionInformation=[0x0,0x28]`）、`ECX=0`、栈顶返回地址 `0x51FA42`。**关键澄清**：上一条把根因判为「`codeCheckTransportBlock` 未判空」是**错的**——返回地址 `0x51FA42` 指向**游戏原生** `0x51FA3D`，我们上传的块根本不在崩溃路径上。**真实根因**：上一条的禁用桩 `xor eax,eax; ret 4` **破坏了 `unk_42C894` 的返回值契约**（该块契约是「原样返回入口 eax」，收尾 `mov eax,ebp; ret 4`，`ebp`=入口 eax）。调用链 `0x51FA0E: call 0x453280`（返回对象指针）→ `0x51FA13: call 0xA9A50`（我们用 descriptor `0x42C930` 写入的跳转）→ `0x51FA3B: mov ecx,eax` → `0x51FA3D: call 0x45C8A0`（thiscall，首条 `mov eax,[ecx+0x28]`）；桩把 eax 抹成 0 → ecx=0 → 读 `0x28` → 访问违例。**修复**：桩改为 `C2 04 00`（`ret 4`）——eax 原样返回、栈弹出 1 个 stdcall 参数、不执行污染逻辑，语义与原块等价；并新增回归测试 `disabledOriginalToolBlockTest`（断言桩为 `ret 4` 且**不含** `33 C0`），**反向验证通过**（改回 `xor eax,eax` → 构建失败 → 恢复 → 全绿）。**取证方法学**：事件日志只给故障偏移、易误导；本轮启用 WER 本地完整转储（`HKCU\...\LocalDumps`, DumpType=2）拿到真实调用栈，一次定位（已写入 §4.5 新增小节）。**全量排查（举一反三）**：①**返回值契约**——329 个上传块中**只有 `unk_42C894` 一个的内容被我们替换过**，其余 328 个是原工具原样字节（仅重定位），故该崩溃类风险面仅此一点；②**未判空解引用**——`tools/audit_unguarded_deref.py` 扫出 7 处候选，逐条核实后 **6 处为误报**（数据区被反汇编成指令 / 绝对地址写 / `ret` 提前返回），唯一真实项 `unk_42B718` 的 `call 0x49C650` 经反汇编确认是**构造函数**（`mov eax,esi; ret 0x20`，必返回非空），**无新增隐患**；③2012 个被改写的游戏调用点中，无其他「返回值语义被改变」的实例。**新增工具**：`tools/audit_call_contracts.py`、`tools/audit_unguarded_deref.py`（可复现）。**验证**：Debug + Release 构建 + `--all assets/config` 离线测试**全绿**；Publish 构建通过；`--ui-smoke` `exit=0`。清理了 30 个临时分析脚本（`tools/_*.py`）与 `build/_*.txt`。**实机验证待用户执行**（判据见 §4.5）。 |
 | 2026-11-01 | **崩溃 #4（`0x5B6754`）根因定位并修复 —— 这是我们自己的 bug，不是原工具的**。根因：`Runtime2026::applyCultivate()` 往 `0x6613EE` 写 1 字节，而 `0x6613EE` 是 id 表 A 首条记录的 **id dword `0x6613EC`（值 `0x000003E8`）的第 2 个字节**（读盘复核：`0x6613E8` 处字节为 `00 84 00 00 e8 03 00 00`）。写入后 id 1000 变成 `0x000103E8` → 游戏按 id 查找失败（`0x5B7050` 的 `cmp dword [entry+4],id`）→ `0x5B72F0`（getflag，**无空指针检查**）解引用空 entry → 异常地址 `0x5B6754`、读取地址 `0x14`。证据：12:48 的 dump 栈上 `[esp+4]=0`（lookup 返回值）、`[esp+0x10]=0x3E8`（被查 id）；两个 dump 栈逐字节一致。**修复（A1）**：删除该写入与 `activate` 变量，注释指向 `RuntimeInjection2026.cpp:1170-1172`（「开启小兵培养」写 `0x40CAEF`/`0x40BF25` = `0x32`/`0`，与原工具三方一致，本来就是对的）。**A2**：保留 `0x14FA656`（培养时长）但标注「⚠️ 未验证地址：PE 内零引用、无指针指向、位于 `.data` BSS；若实机再崩，先删这行」，代码注释 + `DESIGN.md` + `REQUIREMENTS_1_4.md` 同步。**A3**：新增回归测试 `idTableWriteGuardTest()`（断言所有写入不覆盖 5 张 id 表区域 `0x6613E8`/`0x665B70`/`0x667740`/`0x667C08`/`0x669F78` 各 11×`0x20`=`0x160` 字节，特别断言 `0x6613EE` 与 `0x6613EC`；断言「开启小兵培养」开关写 `0x40CAEF`/`0x40BF25` 的值在 `0x32`/`0x00` 之间切换），**反向验证通过**（临时加回 `0x6613EE` 写入 → 测试报 `FAILED: no recorded write overlaps a static id table region` → 恢复 → 全绿）。**A4 归因更正**：§12.4 与本表先前那条「禁用 `unk_42C894` 即消除 `0x5B6754`」是**错误归因**（已被 12:48 dump 证伪：禁用之后仍崩同一地址），已在 `_INJECTION_FIX_NOTES.md` §12.4/§13 与本表就地加更正注记；`PLAN.md`/`CHANGELOG.md`/`DESIGN.md`/`REQUIREMENTS_1_4.md` 里 `0x6613EE` 的错误定址一并更正。**验证**：Debug + Release 构建、`--all assets/config` `exit=0`、`--ui-smoke` `exit=0`、Publish 构建通过、`out/trial/` 已重新出包。清理了 52 个 `tools/_*.py` 与 `武将提拔/{res_144.bin, plugin_try.bin, doc_text.txt}`（`res_135.bin` 保留供 T3 解密用）。**实机验证待用户执行**。 |
+| 2026-11-02 | **兵法抵挡 bug 根因定位并修复 + 熟练度指示图标 + 用户手册**。**① 兵法抵挡**（用户报告「熟练度高的人发动兵法被熟练度低的人抵挡」+「兵法发动概率设置没有生效」两个症状）：根因是**把握概率挂错了骰子**——游戏有抵抗骰（`0x4FEB20` 内 `0x4FEB95`，eax≠0 即抵抗成立）与发动骰（`0x4FEBB0` 内 `0x4FEC5C`，失败即 return 0 不发动）两枚，旧版把把握概率挂在**抵抗骰** `0x4FEB90` 并强制 `eax=1` ⇒ 勾选后**必定被抵挡**且熟练度完全不参与，同时发动骰从未被 hook ⇒ 把握概率勾了也没效果。**一个根因两个症状**。修复：恢复 `0x4FEB90` 原版字节 `BE 0A 00 00 00`，把握概率改挂发动骰 `0x4FEC59`（命中则跳过掷骰、`mov eax,1`、返回 `0x4FEC5E`；未命中原样重放），日志打印 `resist roll restored` 作佐证。**关键栈账约束**：`kakuritsu` 是 `__cdecl`（导出名 `?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z`），原版 `0x4FEC5E` 的 `add esp,0x14` 清 5 个压栈，命中路径**必须照原版压 `0xB` 与 `edx`**。桩 58 字节，`arrayAddrOffset=0x15`、`extraJumpRelOffset=0x28`（rel32 **字段**偏移；`tools/asm_check.py` 的 `rel32` 用的是 E9 **操作码**偏移 0x27/0x35，两套约定勿混用）。**② 熟练度指示图标**（用户 Request F，原文四档：无 / ★（1000<上限≤1500）/ ◎（上限>1500）/ ○（该系有缩短发动间隔，优先级最高））：调查确认**可复用的图标位图 = 0 个**——游戏只有 12×10/33×11 光标位图、2019 工具 `San9PKHard.exe` 无任何位图、原版 `SanIXPKCheat.exe` 的 25 BITMAP + 17 ICON 是打包加密无法提取；且原版那 9 个 8×8 控件（id 1096–1104）实为 `BS_CHECKBOX` 复选框（`sub_404C70.c` 的 `DDX_Check` 证据），绑定的是**「精通」标志位**（`sub_405130.c`）而非熟练度阈值 ⇒ 两个原始二进制都不存在 ★/☆/○/●/◎/环 梯度。实现改用**宋体 Unicode 字形**（★ U+2605、◎ U+25CE、○ U+25CB）：新增 `IDC_PROFICIENCY_MARK_1..9`（1252–1260）+ 对话框 132 的 9 个 Static + `OfficerPersonalization2026::systemSkills`（9 系→兵法表 id 的权威映射：步兵 0-2/骑兵 3-5/弓骑 6-8/弩兵 9-11/水军 12-14/攻城 15-18/智略 19-22/谋略 23-26/策略 27-30，31-40 为特殊兵法不归属任何系）+ `Pages.cpp` 的实时刷新 + 新增 `proficiencyMarkerTest()`。**③ 用户手册**：新增 `docs/用户手册.md`（9 节；56 开关 + 32 数值参数由 `src/generated/parameter_fields.inc` + `recovery/resources/dialogs.json` **程序化生成**，不手写）。**验证**：Debug/Release/Publish 三配置构建 + `--all assets/config` + `--ui-smoke` 全绿（EXIT=0），`out/trial/` 已刷新。清理遗留分析中间产物 15 个（`msg_*.txt` 5、`ref_*.txt` 4、`sanpkcheat/*.txt` 6）。 |

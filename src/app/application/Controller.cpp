@@ -1,5 +1,6 @@
 #include "Controller.h"
 #include "../../runtime/AppPaths.h"
+#include "../../runtime/Runtime2026.h"
 namespace app
 {
 Controller::Controller(ProcessApi2026 api) : runtime_(api)
@@ -9,6 +10,43 @@ Controller::Controller(ProcessApi2026 api) : runtime_(api)
     configuration_.cities = runtime_.cityConfig();
     configuration_.skills = runtime_.skillConfig();
     configuration_.formations = runtime_.formationConfig();
+    appendRuntimeLog("APP controller constructed with recovered defaults");
+}
+namespace {
+// The runtime log is a byte stream; wide strings are converted here so the
+// paths and officer lists stay readable in the log file.
+std::string narrow(const std::wstring &value)
+{
+    if (value.empty()) return {};
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return {};
+    std::string result(static_cast<size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr);
+    return result;
+}
+// Counts the entries of a per-officer array that carry a non-zero value.
+template <size_t N, class Predicate>
+size_t countIf(const std::array<std::uint8_t, N> &values, Predicate predicate)
+{
+    size_t total = 0;
+    for (const auto value : values)
+        if (predicate(value)) ++total;
+    return total;
+}
+// The queued groups are a bit mask. The name of each bit makes the log
+// readable without a lookup table in the reader's head.
+const char *groupName(unsigned group) {
+    switch (group) {
+    case 1: return "Parameters";
+    case 2: return "Persons";
+    case 4: return "Cities";
+    case 8: return "Skills";
+    case 16: return "Formations";
+    case 32: return "Personalization";
+    case 64: return "Speed";
+    default: return "All";
+    }
+}
 }
 ApplicationState Controller::state() const
 {
@@ -33,10 +71,23 @@ std::vector<ConfigLoadError> Controller::load(const std::filesystem::path &direc
     configuration_.growthBoost = growthBoost;
     configuration_.cultivate = cultivate;
     queued_ |= Parameters | Cities;
+    appendRuntimeLogFormat("APP load begin: folder=", narrow(directory.wstring()),
+        " cityAutomatic=", automatic ? "yes" : "no",
+        " skipSiegeSelection=", skipSelection ? "yes" : "no",
+        " lowDeathRate=", deathGradient.lowRate, " deathThreshold=", deathGradient.threshold,
+        " growthList=", growthBoost.officerList, " growthMultiplier=", growthBoost.multiplier,
+        " cultivateRounds=", cultivate.durationRounds);
     auto load = [&](auto &value, ConfigurationSource &source, InputGroup group, const wchar_t *name) {
         const auto result = loadConfigFile(directory / name, value);
-        if (!result.ok()) errors.push_back({name, result});
-        else { source = ConfigurationSource::File; queued_ |= group; }
+        if (!result.ok()) {
+            errors.push_back({name, result});
+            appendRuntimeLogFormat("APP load FAILED: ", name);
+        }
+        else {
+            source = ConfigurationSource::File;
+            queued_ |= group;
+            appendRuntimeLogFormat("APP load ok: ", name, " group=", groupName(group));
+        }
     };
     auto &sources = configuration_.sources;
     load(configuration_.parameters, sources.parameters, Parameters, L"San9PKHardPara.txt");
@@ -64,6 +115,12 @@ bool Controller::commitParameters(const san9::ParameterConfig &value, bool skipS
     configuration_.sources.parameters = confirmedSource(configuration_.sources.parameters);
     queued_ |= Parameters;
     confirmationPending_ = true;
+    appendRuntimeLogFormat("APP commit parameters: skipSiegeSelection=", skipSelection ? "yes" : "no",
+        " computerWorkTiming.improveRewards=", timing.improveRewards ? "yes" : "no",
+        " computerWorkTiming.skipAttackStartDelay=", timing.skipAttackStartDelay ? "yes" : "no",
+        " lowDeathRate=", deathGradient.lowRate, " deathThreshold=", deathGradient.threshold,
+        " growthOfficers=", narrow(growthBoost.officerList), " growthMultiplier=", growthBoost.multiplier,
+        " cultivateRounds=", cultivate.durationRounds);
     stageConfiguration();
     return true;
 }
@@ -74,6 +131,8 @@ bool Controller::commitPersons(const san9::PersonConfig &value)
     configuration_.sources.persons = confirmedSource(configuration_.sources.persons);
     queued_ |= Persons;
     confirmationPending_ = true;
+    appendRuntimeLogFormat("APP commit persons: officers=", value.levels.size(),
+        " friendships=", value.friendships.size());
     stageConfiguration();
     return true;
 }
@@ -83,6 +142,9 @@ bool Controller::commitPersonalization(const OfficerPersonalization2026 &value)
     configuration_.sources.personalization = confirmedSource(configuration_.sources.personalization);
     queued_ |= Personalization;
     confirmationPending_ = true;
+    appendRuntimeLogFormat("APP commit personalization: activationBoost=", countIf(value.activationBoost, [](unsigned char v) { return v != 0; }),
+        " criticalHit=", countIf(value.criticalHit, [](unsigned char v) { return v != 0; }),
+        " powerPercent=", countIf(value.powerPercent, [](unsigned char v) { return v != 0; }));
     stageConfiguration();
     return true;
 }
@@ -95,6 +157,8 @@ bool Controller::commitCities(const san9::CityConfig &value, bool automatic)
     queued_ |= Cities;
     // Relations and attack days are written by the parameter application phase.
     confirmationPending_ = true;
+    appendRuntimeLogFormat("APP commit cities: rows=", value.limits.size(),
+        " cityAutomatic=", automatic ? "yes" : "no");
     stageConfiguration();
     return true;
 }
@@ -104,6 +168,7 @@ bool Controller::commitSkills(const san9::SkillConfig &value)
     configuration_.skills = value;
     configuration_.sources.skills = confirmedSource(configuration_.sources.skills);
     queued_ |= Skills;
+    appendRuntimeLogFormat("APP commit skills: entries=", value.entries.size());
     stageConfiguration();
     return true;
 }
@@ -113,6 +178,7 @@ bool Controller::commitFormations(const san9::FormationConfig &value)
     configuration_.formations = value;
     configuration_.sources.formations = confirmedSource(configuration_.sources.formations);
     queued_ |= Formations;
+    appendRuntimeLogFormat("APP commit formations: entries=", value.entries.size());
     stageConfiguration();
     return true;
 }
@@ -136,6 +202,7 @@ void Controller::stageConfiguration()
     observeLifecycle();
     const auto phase = runtime_.session().phase;
     if (!queued_ || (phase != SessionPhase2026::Idle && phase != SessionPhase2026::Active)) return;
+    const auto groups = queued_;
     auto flags = runtime_.configurationState();
     const auto &sources = configuration_.sources;
     if (queued_ & Speed) runtime_.setPresentationSpeed(configuration_.presentationSpeed);
@@ -170,6 +237,13 @@ void Controller::stageConfiguration()
     }
     runtime_.setConfigurationState(flags);
     queued_ = 0;
+    appendRuntimeLogFormat("APP stage: groups=", groupName(groups),
+        " cityAutomatic=", flags.cityAutomatic ? "yes" : "no",
+        " cityPending=", flags.cityPending ? "yes" : "no",
+        " skillLoaded=", flags.skillLoaded ? "yes" : "no",
+        " skillPending=", flags.skillPending ? "yes" : "no",
+        " formationLoaded=", flags.formationLoaded ? "yes" : "no",
+        " formationPending=", flags.formationPending ? "yes" : "no");
 }
 void Controller::modify(ModifyReason2026 reason)
 {
@@ -187,6 +261,7 @@ void Controller::modify(ModifyReason2026 reason)
 void Controller::poll() { modify(ModifyReason2026::TimerTick); }
 void Controller::applyConfirmedConfiguration()
 {
+    appendRuntimeLog("APP apply confirmed configuration");
     confirmationPending_ = true;
     modify(ModifyReason2026::ParametersConfirmed);
 }
@@ -200,14 +275,18 @@ bool Controller::gameMessage(UINT message, WPARAM action, LPARAM argument)
 }
 bool Controller::undo()
 {
+    appendRuntimeLog("APP undo requested");
     const bool result = runtime_.undo();
     observeLifecycle();
+    appendRuntimeLogFormat("APP undo result=", result ? "ok" : "failed");
     return result;
 }
 bool Controller::retryRecovery()
 {
+    appendRuntimeLog("APP retry recovery requested");
     const bool result = runtime_.retryRollback();
     observeLifecycle();
+    appendRuntimeLogFormat("APP retry recovery result=", result ? "ok" : "failed");
     if (result) stageConfiguration();
     return result;
 }
@@ -215,6 +294,7 @@ bool Controller::toggleForce(unsigned index)
 {
     const bool result = runtime_.togglePlayerForce(index);
     observeLifecycle();
+    appendRuntimeLogFormat("APP toggle force index=", index, " result=", result ? "on" : "off");
     return result;
 }
 bool Controller::personSnapshot(san9::PersonSnapshot &value)

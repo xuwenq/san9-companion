@@ -36,6 +36,7 @@
     <ClCompile Include="..\src\runtime\RuntimeVersion2026.cpp" />
     <ClCompile Include="..\src\runtime\RuntimeInjection2026.cpp" />
     <ClCompile Include="..\src\runtime\RuntimeConfiguration2026.cpp" />
+    <ClCompile Include="..\src\runtime\RuntimeDiagnostics2026.cpp" />
     <ClCompile Include="..\src\runtime\RuntimeZone2026.cpp" />
     <ClCompile Include="..\src\runtime\GameText.cpp" />
     <ClCompile Include="..\src\runtime\GameSnapshots2026.cpp" />

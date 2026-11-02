@@ -22,6 +22,7 @@ void Runtime2026::applyGameConfiguration(ModifyReason2026 reason) {
     applyFormationConfiguration(reason);
     if (field<DWORD>(names::UpdateZoneCityEnabled))
         updateZone(field<DWORD>(names::UpdateZoneCityEnabled));
+    appendRuntimeLog("CONFIG game configuration applied");
 }
 
 // Evidence: 0x409E10, former LABEL_2113..LABEL_2144.
@@ -37,6 +38,7 @@ void Runtime2026::applyCityConfiguration(ModifyReason2026 reason) {
                     state_.data() + names::InitialCityMaxSoldier, san9::CityConfig::Count, nullptr);
         writeMemory(field<HANDLE>(layout::ProcessHandle), field<DWORD>(names::CityMaxPeopleHeartAddress),
                     state_.data() + names::InitialCityMaxPeopleHeart, san9::CityConfig::Count, nullptr);
+        appendRuntimeLogFormat("CONFIG city: initial values written for ", san9::CityConfig::Count, " cities");
         return;
     }
 
@@ -70,12 +72,16 @@ void Runtime2026::applyCityConfiguration(ModifyReason2026 reason) {
         writeGameValue(target + 390, 100 * (std::min<DWORD>)(DWORD(field<BYTE>(row + 5)), 15u));
         writeGameValue(target + 374, 100 * (std::min<DWORD>)(DWORD(field<BYTE>(row + 2)), 20u));
     }
+    appendRuntimeLogFormat("CONFIG city: ", san9::CityConfig::Count, " city records written");
 }
 
 // Evidence: 0x409E10, former LABEL_2144..LABEL_2166.
 void Runtime2026::applySkillConfiguration() {
     const BYTE flags = field<BYTE>(layout::SkillFlags);
-    if (!(flags & 3)) return;
+    if (!(flags & 3)) {
+        appendRuntimeLog("CONFIG skill: no pending change");
+        return;
+    }
     field<BYTE>(layout::SkillFlags) = flags & 0xFD;
     for (DWORD index = 0; index < san9::SkillConfig::Count; ++index) {
         const auto row = layout::SkillEntries + index * 4;
@@ -83,6 +89,8 @@ void Runtime2026::applySkillConfiguration() {
         writeGameValue(target - 24, (std::min<DWORD>)(DWORD(field<BYTE>(row)), 100u));
         writeGameValue(target, (std::min<DWORD>)(DWORD(field<BYTE>(row + 1)), 30u));
         writeGameValue(target - 36, (std::min<DWORD>)(DWORD(field<WORD>(row + 2)), 2500u));
+        appendRuntimeLogFormat("CONFIG skill index=", index, " power=", DWORD(field<BYTE>(row)),
+            " interval=", DWORD(field<BYTE>(row + 1)), " proficiency=", DWORD(field<WORD>(row + 2)));
     }
 }
 
@@ -98,6 +106,7 @@ void Runtime2026::applyFormationConfiguration(ModifyReason2026 reason) {
         }
         writeMemory(field<HANDLE>(layout::ProcessHandle), field<DWORD>(names::FormationAttackRangeAddress),
                     ranges, san9::FormationConfig::Count, nullptr);
+        appendRuntimeLogFormat("CONFIG formation: initial attack ranges written for ", san9::FormationConfig::Count, " formations");
         return;
     }
 
@@ -117,4 +126,5 @@ void Runtime2026::applyFormationConfiguration(ModifyReason2026 reason) {
         writeGameValue(target + 16, (rangeAndView >> 8) & 0xF, 1);
         writeGameValue(target + 20, field<WORD>(row + 6), 2);
     }
+    appendRuntimeLogFormat("CONFIG formation: ", san9::FormationConfig::Count, " formation records written");
 }

@@ -17,6 +17,7 @@ struct ProcessApi2026 {
     decltype(&::VirtualQueryEx) query = ::VirtualQueryEx;
     decltype(&::GetProcessId) processId = ::GetProcessId;
     decltype(&::GetProcessTimes) processTimes = ::GetProcessTimes;
+    decltype(&::GetExitCodeProcess) exitCode = ::GetExitCodeProcess;
     decltype(&::WaitForSingleObject) wait = ::WaitForSingleObject;
     decltype(&::CreateToolhelp32Snapshot) snapshot = ::CreateToolhelp32Snapshot;
     decltype(&::Thread32First) threadFirst = ::Thread32First;

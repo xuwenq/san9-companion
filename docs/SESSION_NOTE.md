@@ -1,6 +1,101 @@
-# 会话续接速记（2026-11-01）
+# 会话续接速记（2026-11-02）
 
 > 详细状态见 `docs/HANDOVER.md`（唯一事实源）。本文件只是本会话的快速索引。
+
+## 2026-11-02 本轮完成
+
+### 1. 兵法抵挡 bug 根因定位并修复（用户报告的两个症状同源）
+
+**用户报告**：①「兵法抵挡似乎有 bug；经常出现熟练度很高的人发动兵法时被熟练度低的人抵挡」
+②「兵法发动概率这个设置也是没有生效的，有武将设置了这个但是没有起效果」。
+
+**根因**：游戏里有两枚独立的骰子，上一版把「把握概率」挂错了。
+
+| 骰子 | 函数 | 掷骰点 | 语义 |
+| --- | --- | --- | --- |
+| **抵抗骰** | `0x4FEB20` | `0x4FEB95` | 概率 = (对手值 − 我方熟练度) / 10；**eax≠0 ⇒ 抵抗成立** |
+| **发动骰** | `0x4FEBB0` | `0x4FEC5C` | 概率 = 100 + 随机抖动；失败 ⇒ `xor eax,eax` 返回 0 ⇒ 兵法不发动 |
+
+旧实现把把握概率 hook 挂在 **`0x4FEB90`（抵抗骰）** 并强制 `eax=1`。因为「eax≠0」就是
+「抵抗成立」，所以**勾选把握概率 ⇒ 该武将必定被抵挡，且熟练度完全不参与判定** ——
+这正是症状 ①。而真正的发动骰从未被 hook，所以「把握概率」勾了也没效果 —— 症状 ②。
+
+**修复**（`src/runtime/Runtime2026.cpp` `applyOfficerPersonalization()`）：
+1. 把 `0x4FEB90` 恢复成原版字节 `BE 0A 00 00 00`（`mov esi,0xA`），抵抗判定完全按原版走；
+2. 把握概率改挂到 **发动骰 `0x4FEC59`**（`push 0xB; push edx; call ebp`），命中时跳过掷骰、
+   直接 `mov eax,1` 返回 `0x4FEC5E`；未命中则原样重放原调用；
+3. 日志打印 `personalization activationBoost: resist roll restored at 0x...` 作为佐证。
+
+**关键约束（改动此桩时必须遵守）**：`kakuritsu` 是 **`__cdecl`**
+（导出名 `?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z`，`YAH` = cdecl），由调用方清参数。
+原版 `0x4FEC5E` 的 `add esp,0x14`（20 字节）恰好清掉 5 个压栈：
+`push eax`(0x4FEC25) + `push ebp`(0x4FEC30) + `push 1`(0x4FEC53) + `push 0xB` + `push edx`。
+所以「命中」路径**必须照原版压入 `0xB` 与 `edx`**（虽然不掷骰），多压/少压都会破坏栈平衡。
+
+**桩布局**：58 字节，hook 点 `0x4FEC59`，返回 `0x4FEC5E`，`arrayAddrOffset=0x15`，
+`extraJumpRelOffset=0x28`（**rel32 字段偏移 = E9 操作码偏移 + 1**）。
+`tools/asm_check.py` 的 `rel32={...}` 用的是 **E9 操作码偏移**（0x27 / 0x35），
+两者指向同一段 rel32 字段，但**约定不同**，改代码时不要混用。
+
+### 2. 熟练度状态指示图标（用户 Request F）
+
+**用户原文**：「你告诉我有几个图标可以用，如果数量度上限是1000（默认值）不显示图标，
+如果是1500以下（比如1200），显示一个五角星，如果是1500以上（1600、2000）显示一个圈，
+如果是发动间隔缩短了，则显示一个环。」
+
+**关于「有几个图标可用」的调查结论：可直接复用的图标位图 = 0 个。**
+- 游戏 `San9PK.exe` 只有 12×10 / 33×11 两个**光标**位图；
+- 2019 版工具 `recovery/sample-2026/San9PKHard.exe` **没有任何位图资源**；
+- 原版作弊器 `SanIXPKCheat.exe` 有 25 BITMAP + 17 ICON，但资源数据是**打包加密**的，
+  暴力 XOR 密钥恢复失败、尺寸暴力枚举有歧义，无法提取。
+
+**原版指示器的真实语义**（与用户描述不同，需知悉）：原版武将配置对话框里那 9 个
+8×8 控件（id 1096–1104，x=196）**不是图标**，而是 `BS_CHECKBOX` 复选框
+（class ordinal 0x80 = Button，style `0x50010002`），证据：
+`recovery/evidence/decompiled/sub_404C70.c` 里是 `DDX_Check(a2, 1096, ...)`…`DDX_Check(a2, 1104, ...)`。
+它们绑定的是武将**逐兵法系的「精通」标志位**（`sub_405130.c`：byte `this+12352` 的 bit 0–7
+= officer+0x36>>3，word `this+6176` 的 bit 8），**与熟练度数值无关**，只有「空 / ✓」两态。
+两个原始二进制里**都不存在** ★/☆/○/●/◎/环 的字形梯度。
+
+**本作实现**：按用户要求实现四档，用**宋体 Unicode 字形**直接画（无需新增位图资源）：
+★ U+2605、◎ U+25CE、○ U+25CB（○ 兼作「环」的近似）。
+
+| 状态 | 判定 |
+| --- | --- |
+| （无） | 上限 = 1000（或填 0 = 不修改），且该系没有缩短间隔 |
+| ★ | 上限在 1000 < cap ≤ 1500 |
+| ◎ | 上限 > 1500 |
+| ○ | 该系至少一个兵法的发动间隔 < 游戏原值（**优先级最高**） |
+
+**改动**：
+- `assets/ui/resource_ids.h`：新增 `IDC_PROFICIENCY_MARK_1..9`（1252–1260）；
+- `assets/ui/dialogs.rc`：对话框 132 新增 9 个 Static（x=336，y 与各行对齐）；
+- `src/runtime/OfficerPersonalization2026.h`：新增 `RefinedCap=1500`、`NoSkill=0xFF`、
+  `systemSkills`（9 系 → 兵法表 id 的权威映射，依据原版对话框 9 行布局：
+  步兵 0-2 / 骑兵 3-5 / 弓骑 6-8 / 弩兵 9-11 / 水军 12-14 / 攻城 15-18 /
+  智略 19-22 / 谋略 23-26 / 策略 27-30；31-40 为特殊兵法，不归属任何系）；
+- `src/app/ui/Pages.cpp`：`PersonPage` 加 `proficiencyMark()` / `refreshProficiencyMarks()` /
+  `isProficiencyMarkSource()` / `updateProficiencyMarkSources()`，在 `loadPerson()` 后刷新，
+  并在上限输入框或 27 个间隔输入框发生 `EN_CHANGE` 时实时刷新；
+- `tests/runtime_test.cpp`：新增 `proficiencyMarkerTest()`（四档判定、环的归属范围、
+  31 个常规兵法全部有归属），已注册进 `--all` 与 `--proficiency-marker`。
+
+### 3. 用户手册
+
+新增 `docs/用户手册.md`（9 节）：主窗口 / 设置页（2.1 参数页 56 开关 + 32 数值，
+由 `src/generated/parameter_fields.inc` + `recovery/resources/dialogs.json` **程序化生成**，
+不手写以免出错；2.2 扩展设置页；2.3 其它数值项）/ 武将配置页 / 都市配置页 /
+兵法配置页 / 阵型配置页 / 配置文件 / 诊断 / 卸载。
+
+### 4. 清理
+
+删除上一轮遗留的分析中间产物（`msg_*.txt` 5 个、`ref_*.txt` 4 个、
+`sanpkcheat/{analysis_utf8,hits,manual_hits,m,s19,dz}.txt` 6 个）与本轮的临时图/转储
+（`out/_ind/`、`out/_*.txt`、`out/_*.png` 等）。
+
+---
+
+# 上一轮（2026-11-01）记录
 
 ## 已完成并验证
 
@@ -67,9 +162,9 @@
 
 ## 当前验证状态
 
-- Debug 构建 ✅ / Release 构建 ✅ / 离线测试 `--all` ✅ / `--ui-smoke` exit=0 ✅
-  （2026-11-01 全绿，含崩溃 #4 修复）
-- Publish 构建 ✅ / `out/trial/` 已重新出包 ✅（2026-11-01，exe 含崩溃 #4 修复）
+- Debug 构建 ✅ / Release 构建 ✅ / Publish 构建 ✅
+- 离线测试 `--all assets/config` 全绿 ✅ / `--ui-smoke` exit=0 ✅（2026-11-02）
+- `out/trial/` 已重新出包 ✅（2026-11-02，含把握概率修复 + 熟练度指示图标）
 - 试用包在无 `San9PK.exe` 环境下启动不崩 ✅
 
 ## 崩溃 #4（`0x5B6754`）修复 —— 2026-11-01
@@ -99,10 +194,13 @@
 1. **实机验证**（唯一剩余阻塞项）——把 `out/trial/` 交给用户，进游戏确认：
    - 不再崩在 `0x5B6754`；
    - 「开启小兵培养」勾选后小兵能被提拔；
+   - **兵法抵挡**：勾选「提升兵法发动机会把握概率」的武将应当**必定发动**，
+     而**不再**出现「必定被抵挡」；日志里应有 `resist roll restored` 一行；
    - 四类个性化（成长加成 / 激活加成 / 威力加倍 / 兵法间隔）逐项确认，
      并回传 `San9Companion.log`。
    **若仍崩溃**：转储已默认开启（`%LOCALAPPDATA%\CrashDumps\San9PK.exe.<pid>.dmp`），
    直接解析该文件即可拿到异常地址 / 寄存器 / 调用栈，不必再靠事件日志猜。
+   **用户已表示会让游戏长时间运行**，届时读取长日志判定。
 2. §3.1.2 兵法威力系数 hook 点（用户已示意暂不开发）。
 3. 存档路线 RE T1–T4（`docs/_CRASH4_HANDOFF_2026-10-31.md` §5c.3），其中 **T3 解密 `武将提拔/res_135.bin`** 是支线。
 4. §12.3 遗留：`0x5B8556` 返回值语义、5 张 id 表灌入路径、VirtualAllocEx 大小。

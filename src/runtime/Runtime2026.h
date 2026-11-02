@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <cstdio>
 #include <cstddef>
+#include <filesystem>
 #include "../model/ParameterConfig.h"
 #include "../model/CityConfig.h"
 #include "../model/SkillConfig.h"
@@ -65,6 +66,31 @@ void appendRuntimeLogTrace(const char* message, std::size_t length);
 void setRuntimeLogTrace(bool enabled);
 // 关闭并释放日志文件句柄；程序退出或测试结束时调用。
 void closeRuntimeLog();
+// 把宽字符串按 UTF-8 写入日志流，日志是字节流，不能直接流出 wstring。
+inline void runtimeLogStream(std::ostringstream& line, const std::wstring& value) {
+    if (value.empty()) return;
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return;
+    std::string text(static_cast<size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), text.data(), size, nullptr, nullptr);
+    line << text;
+}
+inline void runtimeLogStream(std::ostringstream& line, const std::filesystem::path& value) {
+    runtimeLogStream(line, value.wstring());
+}
+template<class T>
+void runtimeLogStream(std::ostringstream& line, const T& value) {
+    line << value;
+}
+// 格式化为一行并写入日志。调用点用流式写法拼装，避免重复样板代码。
+template<class... Args>
+void appendRuntimeLogFormat(const Args&... args) {
+    std::ostringstream line;
+    (runtimeLogStream(line, args), ...);
+    appendRuntimeLog(line.str().c_str());
+}
+// 把一个地址格式化成固定宽度的十六进制，便于在日志里对齐比较。
+std::string runtimeLogAddress(DWORD address);
 // Offset-addressed x86 state recovered from the 2026 binary, independent of MFC.
 // Only this translation layer exposes offsets; dialogs exchange typed values.
 class Runtime2026 final {
@@ -170,6 +196,9 @@ private:
     void applyCultivate();
     void applyProficiencyCap();
     void applyOfficerPersonalization();
+    // Writes one log line per configured officer, so the log alone proves
+    // which personalization values were actually applied.
+    void logPersonalizationSummary();
     void installPerOfficerHook(HANDLE process, const std::array<std::uint8_t, 800>& values,
                                DWORD hookAddress, const BYTE* original, size_t originalSize,
                                DWORD returnAddress,
@@ -191,7 +220,9 @@ private:
         writeMemory(field<HANDLE>(san9::layout2026::ProcessHandle), target, source, size, nullptr);
     }
     void applyGameConfiguration(ModifyReason2026 reason);
-    void applyCityConfiguration(ModifyReason2026 reason);
+    // Writes the values the game actually receives for the combined options,
+    // so the log can be compared with the observed behaviour.
+    void logParameterResults(std::uintptr_t state);    void applyCityConfiguration(ModifyReason2026 reason);
     void applySkillConfiguration();
     void applyFormationConfiguration(ModifyReason2026 reason);
     void writeGameValue(DWORD target, DWORD value, SIZE_T size = sizeof(DWORD));
@@ -215,7 +246,10 @@ private:
         return reinterpret_cast<T*>(dataBytes(address,sizeof(T)));
     }
     template<class T> T& global(DWORD address) { return *pointer<T>(address); }
-    void setStatus(RuntimeStatusKind2026 kind) { status_ = {}; status_.kind = kind; }
+    void setStatus(RuntimeStatusKind2026 kind);
+    // Every status change is recorded. The user needs a trail that shows
+    // whether a modification was applied, not only the failures.
+    void setStatus(RuntimeStatusKind2026 kind, const char* reason);
     template<class T> static std::uintptr_t addressOf(T value) {
         if constexpr (std::is_pointer_v<T>) return reinterpret_cast<std::uintptr_t>(value);
         else return static_cast<std::uintptr_t>(value);

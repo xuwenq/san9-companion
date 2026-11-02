@@ -298,6 +298,10 @@ class PersonPage final : public ui::Dialog
     const int proficiencyCapIds[9] = {IDC_PROFICIENCY_CAP_1, IDC_PROFICIENCY_CAP_2, IDC_PROFICIENCY_CAP_3,
                                       IDC_PROFICIENCY_CAP_4, IDC_PROFICIENCY_CAP_5, IDC_PROFICIENCY_CAP_6,
                                       IDC_PROFICIENCY_CAP_7, IDC_PROFICIENCY_CAP_8, IDC_PROFICIENCY_CAP_9};
+    // 熟练度状态指示器：每兵法系一个，紧跟在熟练度上限输入框右侧。
+    const int proficiencyMarkIds[9] = {IDC_PROFICIENCY_MARK_1, IDC_PROFICIENCY_MARK_2, IDC_PROFICIENCY_MARK_3,
+                                       IDC_PROFICIENCY_MARK_4, IDC_PROFICIENCY_MARK_5, IDC_PROFICIENCY_MARK_6,
+                                       IDC_PROFICIENCY_MARK_7, IDC_PROFICIENCY_MARK_8, IDC_PROFICIENCY_MARK_9};
     const int intervalIds[27] = {IDC_INTERVAL_1, IDC_INTERVAL_2, IDC_INTERVAL_3, IDC_INTERVAL_4,
                                  IDC_INTERVAL_5, IDC_INTERVAL_6, IDC_INTERVAL_7, IDC_INTERVAL_8,
                                  IDC_INTERVAL_9, IDC_INTERVAL_10, IDC_INTERVAL_11, IDC_INTERVAL_12,
@@ -311,6 +315,71 @@ class PersonPage final : public ui::Dialog
                                       35, 36, 37, 38};
     std::wstring nameQuery, statusQuery;
     std::array<int, 4> abilityQuery{{-1, -1, -1, -1}};
+
+    // 熟练度状态指示器。
+    //
+    // 用户要求的四档语义（原文）：上限为 1000（默认）不显示图标；上限在 1000~1500
+    // 之间显示五角星；上限超过 1500 显示圈；该兵法系的发动间隔被缩短则显示环。
+    //
+    // 优先级：环 > 圈 > 五角星 > 无。环优先是因为「缩短发动间隔」是逐兵法的改动，
+    // 比上限更能一眼看出配置生效了。
+    //
+    // 原版（SanIXPKCheat）用的是 8×8 的复选框，反映的是武将「精通」标志位，
+    // 与熟练度数值无关；两个原始二进制里都没有可复用的图标位图资源
+    // （游戏只有 12×10 / 33×11 的光标位图，2019 版工具没有任何位图资源，
+    // 原版作弊器的 25 BITMAP + 17 ICON 是打包加密的）。所以这里的三个字形
+    // 用宋体的 Unicode 码位直接画：★ U+2605、◎ U+25CE、○ U+25CB。
+    std::wstring proficiencyMark(size_t system) const
+    {
+        const auto cap = personalizationDraft.proficiencyCap[index][system];
+        // 环：该系至少有一个兵法的发动间隔比游戏原值短。
+        bool shortened = false;
+        for (auto skill : OfficerPersonalization2026::systemSkills[system])
+        {
+            if (skill == OfficerPersonalization2026::NoSkill) break;
+            if (personalizationDraft.interval[index][skill] <
+                OfficerPersonalization2026::defaultInterval[skill])
+            {
+                shortened = true;
+                break;
+            }
+        }
+        if (shortened) return L"○";      // 环（用圈字符近似，见手册说明）
+        if (cap == 0 || cap == OfficerPersonalization2026::DefaultCap) return {};
+        if (cap > OfficerPersonalization2026::RefinedCap) return L"◎";
+        return L"★";
+    }
+    void refreshProficiencyMarks()
+    {
+        for (size_t i = 0; i < 9; ++i)
+            text(proficiencyMarkIds[i], proficiencyMark(i));
+    }
+    // 熟练度上限输入框与 27 个发动间隔输入框都会影响指示器。
+    bool isProficiencyMarkSource(int id) const
+    {
+        for (auto candidate : proficiencyCapIds)
+            if (candidate == id) return true;
+        for (auto candidate : intervalIds)
+            if (candidate == id) return true;
+        return false;
+    }
+    // 把编辑框里的当前值同步回草稿，供指示器判定使用。草稿只在这里被
+    // 覆盖成用户正在输入的内容；正式的取值仍由 savePersonalization 负责。
+    void updateProficiencyMarkSources()
+    {
+        for (size_t i = 0; i < 9; ++i)
+        {
+            auto value = number(proficiencyCapIds[i]);
+            if (value && *value >= 0 && *value <= 65535)
+                personalizationDraft.proficiencyCap[index][i] = std::uint16_t(*value);
+        }
+        for (size_t i = 0; i < 27; ++i)
+        {
+            auto value = number(intervalIds[i]);
+            if (value && *value >= 0 && *value <= int(OfficerPersonalization2026::MaxInterval))
+                personalizationDraft.interval[index][intervalSkillIds[i]] = std::uint8_t(*value);
+        }
+    }
     void initialize() override
     {
         appendRuntimeLog("PersonPage::initialize begin");
@@ -378,6 +447,7 @@ class PersonPage final : public ui::Dialog
         number(IDC_POWER_COEF, personalizationDraft.powerPercent[index]);
         check(IDC_ACTIVATION_BOOST, personalizationDraft.activationBoost[index] != 0);
         check(IDC_CRITICAL_HIT, personalizationDraft.criticalHit[index] != 0);
+        refreshProficiencyMarks();
         loading = false;
     }
     bool savePerson()
@@ -487,6 +557,14 @@ class PersonPage final : public ui::Dialog
             for (size_t i = 0; i < 4; ++i)
                 if (id == abilityIds[i])
                     abilityQuery[i] = -1;
+            // 熟练度上限或发动间隔被改动时，指示器要立刻反映新的状态。
+            // 这里读的是编辑框里的当前值（可能还没保存），所以指示器始终
+            // 显示用户看到的数字，而不是上一次保存的值。
+            if (isProficiencyMarkSource(id))
+            {
+                updateProficiencyMarkSources();
+                refreshProficiencyMarks();
+            }
         }
         else if (event == ui::Event::Focus && (id == IDC_PERSON_INDEX_1 || id == IDC_PERSON_INDEX_2))
         {
