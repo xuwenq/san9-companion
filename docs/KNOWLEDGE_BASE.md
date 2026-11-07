@@ -346,7 +346,7 @@ movzx eax, word [CPersonData + 4]
 | ActivationBoost | `ActivationBoost` | **把握概率**（发动判定骰） | hook `0x4FEC59`，恢复 `0x4FEB90` |
 | CriticalHit | `CriticalHit` | **威力一定加倍 / 会心** | hook `0x50603B` |
 | Interval | `Interval` | **兵法发动间隔** | hook `0x4FF08B` |
-| BarbarianFormation | `BarbarianFormation` | 玩家蛮族阵型 | `0x4FB60C` / `0x4FB610` / `0x4FB614` + `AllocationBase+0xA000` |
+| BarbarianFormation | `BarbarianFormation` | 玩家蛮族阵型 | `0x4FB60C` / `0x4FB610` / `0x4FB614` + `AllocationBase+0xA000`（关掉时写回 `0x4FB5D3`） |
 | ComputerWorkTiming | `ComputerWorkTiming` | 电脑作业时机 | `0x6574F0` / `0x6574C0` |
 | SkipSiegeSelection | `SkipSiegeSelection` | 跳过耐久攻城选择 | `0x4B87EB` + `state+6824` 分支指针 |
 
@@ -413,6 +413,7 @@ movzx eax, word [CPersonData + 4]
 | 「兵法表是 39 条」 | **41 条**（`0x453720`: `cmp eax,0x29`） | 静态反汇编 |
 | 「阵型属性查表函数在 `0x4FB564`」 | 入口是 **`0x4FB560`**。`0x4FB564` 是函数内第二条指令（`or eax,-1`），Shape.exe 打的正是它 | 逐字节反汇编 |
 | 「把握概率 hook 在 `0x4FEB90` / `0x4FEB95`」 | `0x4FEB90` 是**抵抗判定**的掷骰点（`eax≠0` = 抵抗成立）。把握概率要挂**发动骰** `0x4FEC59` | 游戏里有两枚骰子；旧 hook 强制 `eax=1` ⇒ **必定被抵挡**且熟练度完全不参与 |
+| 「1047『电脑用蛮族阵型』和『玩家选蛮族阵型』是同一个功能」 | 完全不同。旧功能重写**部队**的阵型指针 `[ecx+0x6C]`（掷骰 + `0x453890` 查表）；新功能改**阵型属性跳转表** `0x4FB5DC` 的 12/13/14 三项 | 两段代码块逐字节反汇编对比；旧功能已按用户要求移除（首字节恒为 `0xC3`） |
 
 ---
 
@@ -484,6 +485,46 @@ movzx eax, word [CPersonData + 4]
 - 写 3 个 dword 到 `0x4FB5DC + index*4` → `0x4FB60C` / `0x4FB610` / `0x4FB614`
 - **这两处补丁写的是游戏的 `.text`**（`0x4FB5DC`），需要 `VirtualProtectEx` 改保护属性
 
+### 7.4 开关组合与「写回原值」（2026-11-07 补充）
+
+本功能由**两个开关**共同控制，**两处都开才生效**：
+
+| 开关 | 位置 | 角色 |
+|---|---|---|
+| `BarbarianFormation` | `San9Features.ini` `[Features]` | 逐功能测试用的总开关（隔离其它功能的干扰） |
+| 1047「启用玩家蛮族阵型」 | 设置窗口复选框 | 玩家日常使用的开关 |
+
+生效条件 = `ini 开关 AND 复选框`（`Runtime2026::applyBarbarianFormation()`）。
+任一关掉 → 12/13/14 **写回游戏原始值 `0x4FB5D3`**（`mov eax,0x3C3; ret`）。
+
+> ⚠️ **必须写回，不能只是「不再写」**：桩在伴侣进程分配区里，
+> 只改不还原 = 游戏里留着指向伴侣进程的指针 → 伴侣退出后野指针崩溃。
+> `0x4FB5D3` 与游戏出厂状态**逐字节一致**（已用 `San9PK.exe` 核对）。
+
+日志：
+```
+FEATURE barbarianFormation : on, entries 12/13/14 now return 0x3CC (stub at 0x...)
+FEATURE barbarianFormation : off, entries 12/13/14 restored to 0x4FB5D3
+                               (the ini switch is off)
+                               (the check box 1047 is off)
+```
+
+### 7.5 旧的「电脑用蛮族阵型」是**另一套机制**（已移除）
+
+2019 工具的 `m_bEnableBaramArray`（1047 的原含义）与「玩家选蛮族阵型」无关：
+
+| 项 | 内容 |
+|---|---|
+| 代码块 | `codeUseBaramArray`，88 字节，上传到 `AllocationBase+0x3EA0` |
+| 作用 | 重写**每个部队**的阵型指针 `[ecx+0x6C]` |
+| 关键调用 | `0x4AEFF0`（掷骰 wrapper）+ `0x453890`（阵型记录查表） |
+| 开关机制 | 把代码块**首字节**写成 `0x56`（执行）或 `0xC3`（直接返回） |
+
+**结论**：它改的是「电脑部队用哪个阵型」，不是「玩家能不能选蛮族阵型」。
+按用户要求，本轮用「玩家蛮族阵型」**替换**掉它：
+代码块仍上传，但首字节**恒为 `0xC3`**（永不执行）。
+注入名字 `EnableBaramArrayEnabled` → `PlayerBarbarianFormation`。
+
 ---
 
 ## 8. 熟练度图标注入块（188 字节）字节图
@@ -533,7 +574,7 @@ movzx eax, word [CPersonData + 4]
 
 ```
 FEATURES: file=... summary=1 0 1 1 ...   (1=on 0=off，顺序与 ini 一致)
-FEATURE barbarianFormation : off, nothing is written
+FEATURE barbarianFormation : off, entries 12/13/14 restored to 0x4FB5D3
 ```
 
 `summary()` 的顺序 = `Feature2026` 枚举顺序 = ini 文件顺序 → 可逐项对照。
@@ -545,7 +586,8 @@ FEATURE barbarianFormation : off, nothing is written
 | 主题 | 文件 |
 |---|---|
 | 逐功能开关 | `src/runtime/FeatureSwitches2026.{h,cpp}`、`San9Features.ini` |
-| 蛮族阵型 | `src/runtime/BarbarianFormation2026.h` |
+| 蛮族阵型 | `src/runtime/BarbarianFormation2026.h`（常量 + 逆向记录）|
+| 逐功能开关与复选框的关系 | `docs/HANDOVER.md` §4.12、`docs/LIVE_TEST_PLAN.md` T3 |
 | 熟练度图标规则 | `src/runtime/ProficiencyMark2026.h` |
 | 注入主逻辑 | `src/runtime/Runtime2026.cpp` |
 | 2019 遗产钩子 | `src/runtime/RuntimeInjection2026.cpp` |
@@ -574,6 +616,17 @@ FEATURE barbarianFormation : off, nothing is written
   （2026-11-07 就因为 `git checkout tests/runtime_test.cpp` 丢掉了整段未提交的
   `proficiencyMarkInjectionTest`，最后靠 一个一次性 Python 补丁脚本 重写恢复。）
 - ✅ 改 CRLF 文件用 Edit 工具，或用 Python 显式处理换行。
+- ❌ **不要用 `tools/reconstruct.py` 重新生成 `assets/ui/dialogs.rc`** ——
+  会丢掉手工布局改动（对话框 132 的「武将个性化」区块消失），
+  并把简体「斗舰」变回繁体「鬥舰」。改 `.rc` 直接编辑文件。
+- ⚠️ **改「生成物」之前先想清楚生成器**：生成物（`src/generated/*.json`）
+  由 `tools/recover_*.py` 生成。如果手工改了生成物而没改生成器，
+  下次跑生成器就丢了（而且 `Verify.ps1` 会挂）。
+  正确做法是**改生成器 + 改 `tools/dialog_customizations.py` 里的定制规则**，
+  再跑 `python tools/recover_parameters.py`。
+  （2026-11-07 就是这么发现 `Verify.ps1` 里 `test_generated_metadata_current`
+  从 commit `326098d` 起就一直在失败：1160 的 caption 是简体「斗舰」，
+  资源证据里是繁体「鬥舰」，两边一直不一致。）
 
 ### 11.2 逆向
 

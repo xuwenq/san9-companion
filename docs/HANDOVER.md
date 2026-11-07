@@ -25,7 +25,7 @@
 | **熟练度指示图标** | ✅ **已实现（2026-11-02，修改器侧；2026-11-07 两边统一为空心 ☆）**。四档：无 / ☆（1000<上限≤1500）/ ◎（上限>1500）/ ○（该系有缩短发动间隔，优先级最高）。原版二进制里**没有任何可复用的图标位图**（游戏只有光标位图、2019 工具无位图、原版作弊器的位图是打包加密的），故用 Unicode 字形绘制。规则与游戏内注入共用 `ProficiencyMark2026`。详见 §4.9 |
 | **游戏内 ★/◎/○ 指示图标** | ✅ **已定位并实现（2026-11-07）；同日实机崩溃已修**。绘制代码 = 2019 工具遗产 `codePersonCharNum`（140 字节，装在**注入分配区** `allocationBase+0x6960`，由游戏 `0x451A5C` 的 `call` 进入），图标是 CP950 字符 ☆=`a1 b8` / ◎=`a1 b7` / ○=`a1 b3`，**游戏本体没有**。已重写为查表块：配置优先、**未配置回落原生**（精通→☆、精进→◎），两边共用 `ProficiencyMark2026` 规则、都是空心 ☆。⚠️ **实机崩溃（rel8 有符号溢出）已修，块 172→188 字节、4 个守卫改近跳转，复验仍未做**。详见 §4.10 / §4.11 |
 | **逐功能开关** | ✅ **已实现（2026-11-07）**。`San9Features.ini`（与 exe 同目录，`[Features]` 段，13 个开关，只认精确 `0`/`1`，其它值当 off；启动时读一次）。开关关闭 = **完全不注入**。日志 `FEATURES: summary=1 0 1 ...` 可与 ini 逐项对照。详见 §4.11.3 |
-| **玩家蛮族阵型** | ✅ **已实现（2026-11-07）**。游戏用 28 项跳转表 `0x4FB5DC` 查阵型属性，12/13/14 返回异族专用属性 `0x3C3` → 普通势力选不了。我们把这 3 项改指向返回 `0x3CC` 的桩（`AllocationBase+0xA000`），其余 25 项不动。界面 1047 字幕改为「启用玩家蛮族阵型」。详见 §4.11.4 |
+| **玩家蛮族阵型** | ✅ **已实现（2026-11-07）**。游戏用 28 项跳转表 `0x4FB5DC` 查阵型属性，12/13/14 返回异族专用属性 `0x3C3` → 普通势力选不了。我们把这 3 项改指向返回 `0x3CC` 的桩（`AllocationBase+0xA000`），其余 25 项不动。界面 1047 字幕改为「启用玩家蛮族阵型」，**替换掉旧的「电脑用蛮族阵型」**（该功能已停用）。开关 = ini `BarbarianFormation` AND 复选框 1047，任一关掉都会把 3 项**写回原值 `0x4FB5D3`**。详见 §4.11.4 |
 | **知识资产化** | ✅ **已实现（2026-11-07）**。新增 `docs/KNOWLEDGE_BASE.md`（逆向结论的单一可信来源：地址→用途→证据→置信度、x86 注入陷阱库、已被推翻的结论、实机状态表）与 `docs/LIVE_TEST_PLAN.md`（逐功能实机清单）。详见 §4.11.5 |
 | **用户手册** | ✅ `docs/用户手册.md` 已写完（9 节，含 56 开关 + 32 数值参数的完整说明） |
 | **注入代码崩溃排查** | ✅ **崩溃 #3 根因已确认并修复**（上一条的禁用桩破坏了原块的返回值契约，§4.5）；329 块全量排查完成，**无新增隐患** |
@@ -53,6 +53,11 @@ Claude Code 恢复会话时会把整个 transcript 读成一个 JS 字符串，�
 4. 每完成一项，**把状态写回本文件**（改「未完成事项」的勾选状态 + 在「变更日志」追加一行）。这是维持交接链的纪律。
 
 ### 1.1 启动提示词（直接复制到新会话）
+
+> **2026-11-07 更新版**（本轮改了 1047 的接线，最新的提示词见本节末尾
+> 「1.1.1 2026-11-07 接力提示词（当前状态用这个）」）。
+
+#### 1.1.1 2026-11-07 接力提示词（当前状态用这个）
 
 > 必须回答的问题：**新会话要不要读 `docs/REQUIREMENTS_1_4.md`？**
 > **要。** 它是代码级精确记录（内存地址、注入字节布局、已知坑、审查结论），755 行 / 53 KB。
@@ -94,6 +99,50 @@ Claude Code 恢复会话时会把整个 transcript 读成一个 JS 字符串，�
   `tools/Build-App.ps1 -Configuration Publish` 产出静态 CRT 版本，可直接外发。
 
 细节与证据链见 REQUIREMENTS_1_4.md §11.17.2.1，修复清单见 §11.17.2.3。
+
+### 1.1.2 当前接力提示词（2026-11-07 之后直接复制这段）
+
+```
+项目：`G:/aiprojects/game/san9-companion`（分支 dev）。Win32 x86 伴侣程序，
+注入 San9PK.exe（三国志9 PK）。**不要自己 git commit / push，用户自己提交。**
+
+先读这三个文件（按顺序，不要一次全读别的）：
+1. docs/HANDOVER.md —— 状态与待办的唯一事实源。重点 §0 速览、§3 未完成事项、
+   §3.6 建议顺序、§4 已知问题、§4.12（本轮 1047 重新接线）、§5 构建与测试。
+2. docs/KNOWLEDGE_BASE.md —— 逆向结论的单一可信来源。重点 §5 注入代码地图、
+   §6 已被推翻的结论（别走回头路）、§7 蛮族阵型、§11 工作纪律。
+3. docs/LIVE_TEST_PLAN.md —— 逐功能实机验证清单（T1…T11）。
+
+现状（2026-11-07）：
+- B/C/A 三阶段已完成：图标崩溃已修、13 个逐功能开关已实现、
+  玩家蛮族阵型已实现、KNOWLEDGE_BASE + LIVE_TEST_PLAN 已写。
+- 本轮又把 1047 重新接线：「启用玩家蛮族阵型」**替换**掉旧的
+  「电脑用蛮族阵型」（后者已永久停用）。生效条件 =
+  ini 的 BarbarianFormation AND 设置窗口复选框 1047；
+  任一关掉会把跳转表 12/13/14 写回游戏原值 0x4FB5D3。
+  细节见 HANDOVER §4.12 与 KNOWLEDGE_BASE §7.4/§7.5。
+- **剩余唯一阻塞项：实机验证。** 用户正在按 LIVE_TEST_PLAN 逐个测，
+  第一个是 T3（玩家蛮族阵型）。
+- 工作区有未提交改动（15 个文件，见 git status --short）。
+
+接手后：
+- 先跑一遍基线，确认没坏：
+    powershell -NoProfile -ExecutionPolicy Bypass -File ./Verify.ps1
+  （期望：31 tests OK）
+- 然后等/协助用户做实机验证，或从 LIVE_TEST_PLAN 的 T1…T11 里挑一项推进。
+- 每完成一项，把状态写回 docs/HANDOVER.md §0/§3、docs/LIVE_TEST_PLAN 的
+  验证状态表、docs/SESSION_NOTE.md。这是维持交接链的纪律。
+
+纪律（务必遵守）：
+- ❌ 不要 git commit / git push。
+- ❌ 不要用 sed -i 改 tests/runtime_test.cpp（它是 CRLF，sed 会转成 LF）。
+- ❌ 不要 git checkout 未提交的文件（会永久丢失工作）。
+- ❌ 不要用 tools/reconstruct.py 重新生成 assets/ui/dialogs.rc
+  （会丢手工布局改动并把简体「斗舰」变回繁体「鬥舰」）。
+- ✅ 改生成物（src/generated/*）要同时改生成器
+  （tools/recover_*.py / tools/injection_names.py / tools/dialog_customizations.py）。
+- ✅ 结论要有字节级反汇编支撑；做完修复做一次反向验证。
+```
 
 ## 纪律（务必遵守）
 
@@ -961,6 +1010,43 @@ criticalHit / interval / barbarianFormation / computerWorkTiming / skipSiegeSele
 - 写 3 个 dword 到 `0x4FB5DC + index*4` → `0x4FB60C` / `0x4FB610` / `0x4FB614`
 - **这两处补丁写的是游戏的 `.text`**，需要 `VirtualProtectEx` 改保护属性
 
+**开关与开关的配合（2026-11-07 补充）**
+
+本功能由**两个开关**共同控制，**两处都开才生效**：
+
+| 开关 | 位置 | 作用 |
+| --- | --- | --- |
+| `BarbarianFormation` | `San9Features.ini` 的 `[Features]` 段 | 逐功能测试用的总开关（关掉可隔离其它功能的干扰） |
+| 1047「启用玩家蛮族阵型」 | 设置窗口的复选框 | 玩家日常使用的开关 |
+
+生效条件 = `ini 开关 AND 复选框`。任何一处关掉，
+`applyBarbarianFormation()` 都会把 12/13/14 三项**写回游戏原始值
+`0x4FB5D3`**（即 `mov eax,0x3C3; ret`），并写入日志：
+
+```
+FEATURE barbarianFormation : off, entries 12/13/14 restored to 0x4FB5D3
+                               (the ini switch is off)      ← ini 开关关
+                               (the check box 1047 is off)  ← 复选框关
+```
+
+> **为什么必须写回原值**：桩在伴侣进程的游戏分配区里。如果只改不还原，
+> 游戏里会留下一个指向伴侣分配区的指针；伴侣退出后就是野指针 → 崩溃。
+> 写回 `0x4FB5D3` 与游戏出厂状态**逐字节一致**。
+
+**旧功能「电脑用蛮族阵型」已被移除（2026-11-07）**
+
+2019 工具的 `m_bEnableBaramArray`（原 1047 的含义）走的是**另一条完全不同的
+机制**：`codeUseBaramArray`（上传块 `base+0x3EA0`，88 字节）会重写**每个部队
+的阵型指针** `[ecx+0x6C]`，用的是掷骰子（`0x4AEFF0`）+ 阵型查表（`0x453890`），
+跟「玩家能不能选蛮族阵型」毫无关系。
+
+按用户要求，本轮**用「玩家蛮族阵型」替换掉它**：
+- `codeUseBaramArray` 代码块仍然上传（`uploadInjectionPayloads` 保持原样），
+  但它的首字节被**固定**写成 `0xC3`（`ret`），即永远不执行。
+- 1047 的含义改为「启用玩家蛮族阵型」，由 `applyBarbarianFormation()` 消费。
+- 注入名字 `EnableBaramArrayEnabled` 已改名为 `PlayerBarbarianFormation`
+  （`src/model/InjectionNames2026.json` → `src/generated/InjectionNames2026.h`）。
+
 **界面字幕**：`assets/ui/dialogs.rc` 控制 1047 由「启用电脑蛮族阵型」
 改为「**启用玩家蛮族阵型**」（`tools/dialog_customizations.py` 同步）。
 
@@ -968,8 +1054,10 @@ criticalHit / interval / barbarianFormation / computerWorkTiming / skipSiegeSele
 > 生成器会丢掉手工做过的界面布局改动（对话框 132 的「武将个性化」区块会消失），
 > 并把简体「斗舰」变回繁体「鬥舰」。改字幕请**直接编辑 `.rc`**。
 
-**回归测试**：`--barbarian-formation`（开关关时跳转表不动；
-开关开时只有 12/13/14 被改写，且指向返回 `0x3CC` 的桩）。
+**回归测试**：`--barbarian-formation`（覆盖 5 种情形：
+ini 关 + 复选框开 → 写回原值；两者都开 → 指向 `0x3CC` 桩；
+复选框由开变关 → 写回原值；再变回开 → 重新指向桩；
+旧的「电脑用蛮族阵型」代码块首字节恒为 `0xC3`）。
 
 #### 4.11.5 新增文档
 
@@ -986,6 +1074,87 @@ criticalHit / interval / barbarianFormation / computerWorkTiming / skipSiegeSele
   （2026-11-07 就因为 `git checkout tests/runtime_test.cpp` 丢掉了整段未提交的
   `proficiencyMarkInjectionTest`，最后靠 一个一次性 Python 补丁脚本 重写恢复。）
 - ❌ **不要自己 `git commit` / `git push`** —— 用户自己提交。
+- ❌ **不要用 `tools/reconstruct.py` 重新生成 `assets/ui/dialogs.rc`** ——
+  会丢掉手工布局改动（对话框 132 的「武将个性化」区块消失）并把简体「斗舰」
+  变回繁体「鬥舰」。改 `.rc` 直接编辑文件。
+
+---
+
+## 4.12 1047 重新接线：「玩家蛮族阵型」替换「电脑用蛮族阵型」（2026-11-07）
+
+> 本节是**给接手的新模型**的：本轮改了什么、为什么、怎么验证、下一步是什么。
+
+### 4.12.1 用户需求原文
+
+> 「是的，改完给我发版」
+> 「我要开始逐个测试了，首先我会测试 玩家蛮族阵型这个」
+> 「的旧功能（2019 工具的「电脑用蛮族阵型」**不需要保留**」
+> 「相当于用玩家用蛮族阵型 **替换掉**」
+
+### 4.12.2 关键发现：旧功能和新功能是**两套完全不同的机制**
+
+这是本轮最重要的结论。接手的人如果以为它们是一回事，一定会改错地方。
+
+| | 旧：电脑用蛮族阵型 | 新：玩家蛮族阵型 |
+|---|---|---|
+| 注入名（2019） | `m_bEnableBaramArray` | — |
+| 注入名（现在） | — | `PlayerBarbarianFormation`（`state+176`） |
+| 代码块 | `codeUseBaramArray`，88 字节，在 `AllocationBase+0x3EA0` | 6 字节桩，在 `AllocationBase+0xA000` |
+| 改什么 | **每个部队**的阵型指针 `[ecx+0x6C]` | **阵型属性跳转表** `0x4FB5DC` 的 12/13/14 三项 |
+| 手段 | 掷骰 `0x4AEFF0` + 阵型记录查表 `0x453890` | 3 个 dword 指向返回 `0x3CC` 的桩 |
+| 开关机制 | 代码块首字节写 `0x56`(执行) 或 `0xC3`(立即返回) | ini 开关 AND 复选框 1047 |
+| 效果 | 电脑部队改用别的阵型 | 玩家**能选**蛮族/山越阵型 |
+
+旧功能的开关写法（`RuntimeInjection2026.cpp`）：
+
+```cpp
+patchValue = ... != 0 ? 86 : 195;   // 86=0x56 执行，195=0xC3 直接返回
+writePatch(dword_42F1A8, &patchValue, 1u);
+```
+
+`dword_42F1A8` 是游戏里的一个**指针槽**，指向分配区里的 `codeUseBaramArray` 块。
+所以「关掉旧功能」= 把那个块的**首字节**改成 `0xC3`。
+
+### 4.12.3 本轮改动清单
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/runtime/Runtime2026.cpp` | `applyBarbarianFormation()` 重写：读 `state+176`（复选框）与 ini 开关，两者都开才写桩；**任一关掉就把 12/13/14 写回 `0x4FB5D3`** |
+| `src/runtime/RuntimeInjection2026.cpp` | 删掉旧的 `EnableBaramArrayEnabled` 写；改成固定写 `0xC3`（旧功能永久停用） |
+| `src/runtime/BarbarianFormation2026.h` | 新增常量 `OriginalBarbarianFormationEntry = 0x4FB5D3` |
+| `src/generated/InjectionNames2026.h` | `EnableBaramArrayEnabled` → `PlayerBarbarianFormation`（偏移仍是 176） |
+| `src/model/InjectionNames2026.json` | 同上的来源文件（改了要跑 `python tools/injection_names.py`） |
+| `src/generated/parameters.json` | 1047 的 caption 改为「启用玩家蛮族阵型」 |
+| `tools/dialog_customizations.py` | 1047 的字幕改写规则（已有）；**新增 1160 的「鬥舰」→「斗舰」** |
+| `tools/recover_parameters.py` | caption 现在过 `dialog_customizations.control_title()` |
+| `tests/runtime_test.cpp` | `barbarianFormationTest()` 扩到 5 种情形 |
+| `San9Features.ini` / `out/trial/使用说明.txt` | 说明两个开关的关系 |
+
+### 4.12.4 「必须写回原值」的原因（别改回去）
+
+桩在**伴侣进程的游戏分配区**里。如果关掉功能时只是「不再写」，
+游戏里会留着指向伴侣分配区的指针；伴侣一退出，那个指针就是野指针 → 崩溃。
+所以关掉时必须写回游戏原值 `0x4FB5D3`（已用 `San9PK.exe` 逐字节核对：
+`b8 c3 03 00 00 c3` = `mov eax,0x3C3; ret`）。
+
+### 4.12.5 怎么验证
+
+```bash
+# 离线（不需要游戏）
+powershell -NoProfile -ExecutionPolicy Bypass -File ./Build.ps1 -Configuration Debug
+./build/tests/Debug/San9RuntimeTests.exe --all assets/config   # exit=0
+python tools/check_injection_blocks.py                          # 12 blocks, 0 problems
+powershell -NoProfile -ExecutionPolicy Bypass -File ./Verify.ps1 # 31 tests OK
+```
+
+实机按 `docs/LIVE_TEST_PLAN.md` 的 **T3** 走。
+
+### 4.12.6 下一步（给接手的人）
+
+1. **实机跑 T3**（玩家蛮族阵型）—— 这是用户下一步就要做的事。
+2. 实机跑 **T1/T2**（熟练度图标 / 熟练度上限）—— 图标崩溃修复后**从未复验**。
+3. `docs/LIVE_TEST_PLAN.md` 的 T4–T11 按顺序逐个测。
+4. 每次测完，把结果写回 `docs/LIVE_TEST_PLAN.md` 的「验证状态」表 + 本文件的 §0 速览。
 
 ---
 
@@ -1171,3 +1340,4 @@ e84ab3c feat(officer): add personalization persistence, design doc and tests
 | 2026-10-31 | **崩溃 #3 根因确认并修复（上一条的「修复」本身就是崩溃源）+ 全量排查完成**。实机崩溃 #3：异常地址 `0x45C8A0`、读取地址 `0x28`（异常信息 `ExceptionInformation=[0x0,0x28]`）、`ECX=0`、栈顶返回地址 `0x51FA42`。**关键澄清**：上一条把根因判为「`codeCheckTransportBlock` 未判空」是**错的**——返回地址 `0x51FA42` 指向**游戏原生** `0x51FA3D`，我们上传的块根本不在崩溃路径上。**真实根因**：上一条的禁用桩 `xor eax,eax; ret 4` **破坏了 `unk_42C894` 的返回值契约**（该块契约是「原样返回入口 eax」，收尾 `mov eax,ebp; ret 4`，`ebp`=入口 eax）。调用链 `0x51FA0E: call 0x453280`（返回对象指针）→ `0x51FA13: call 0xA9A50`（我们用 descriptor `0x42C930` 写入的跳转）→ `0x51FA3B: mov ecx,eax` → `0x51FA3D: call 0x45C8A0`（thiscall，首条 `mov eax,[ecx+0x28]`）；桩把 eax 抹成 0 → ecx=0 → 读 `0x28` → 访问违例。**修复**：桩改为 `C2 04 00`（`ret 4`）——eax 原样返回、栈弹出 1 个 stdcall 参数、不执行污染逻辑，语义与原块等价；并新增回归测试 `disabledOriginalToolBlockTest`（断言桩为 `ret 4` 且**不含** `33 C0`），**反向验证通过**（改回 `xor eax,eax` → 构建失败 → 恢复 → 全绿）。**取证方法学**：事件日志只给故障偏移、易误导；本轮启用 WER 本地完整转储（`HKCU\...\LocalDumps`, DumpType=2）拿到真实调用栈，一次定位（已写入 §4.5 新增小节）。**全量排查（举一反三）**：①**返回值契约**——329 个上传块中**只有 `unk_42C894` 一个的内容被我们替换过**，其余 328 个是原工具原样字节（仅重定位），故该崩溃类风险面仅此一点；②**未判空解引用**——`tools/audit_unguarded_deref.py` 扫出 7 处候选，逐条核实后 **6 处为误报**（数据区被反汇编成指令 / 绝对地址写 / `ret` 提前返回），唯一真实项 `unk_42B718` 的 `call 0x49C650` 经反汇编确认是**构造函数**（`mov eax,esi; ret 0x20`，必返回非空），**无新增隐患**；③2012 个被改写的游戏调用点中，无其他「返回值语义被改变」的实例。**新增工具**：`tools/audit_call_contracts.py`、`tools/audit_unguarded_deref.py`（可复现）。**验证**：Debug + Release 构建 + `--all assets/config` 离线测试**全绿**；Publish 构建通过；`--ui-smoke` `exit=0`。清理了 30 个临时分析脚本（`tools/_*.py`）与 `build/_*.txt`。**实机验证待用户执行**（判据见 §4.5）。 |
 | 2026-11-01 | **崩溃 #4（`0x5B6754`）根因定位并修复 —— 这是我们自己的 bug，不是原工具的**。根因：`Runtime2026::applyCultivate()` 往 `0x6613EE` 写 1 字节，而 `0x6613EE` 是 id 表 A 首条记录的 **id dword `0x6613EC`（值 `0x000003E8`）的第 2 个字节**（读盘复核：`0x6613E8` 处字节为 `00 84 00 00 e8 03 00 00`）。写入后 id 1000 变成 `0x000103E8` → 游戏按 id 查找失败（`0x5B7050` 的 `cmp dword [entry+4],id`）→ `0x5B72F0`（getflag，**无空指针检查**）解引用空 entry → 异常地址 `0x5B6754`、读取地址 `0x14`。证据：12:48 的 dump 栈上 `[esp+4]=0`（lookup 返回值）、`[esp+0x10]=0x3E8`（被查 id）；两个 dump 栈逐字节一致。**修复（A1）**：删除该写入与 `activate` 变量，注释指向 `RuntimeInjection2026.cpp:1170-1172`（「开启小兵培养」写 `0x40CAEF`/`0x40BF25` = `0x32`/`0`，与原工具三方一致，本来就是对的）。**A2**：保留 `0x14FA656`（培养时长）但标注「⚠️ 未验证地址：PE 内零引用、无指针指向、位于 `.data` BSS；若实机再崩，先删这行」，代码注释 + `DESIGN.md` + `REQUIREMENTS_1_4.md` 同步。**A3**：新增回归测试 `idTableWriteGuardTest()`（断言所有写入不覆盖 5 张 id 表区域 `0x6613E8`/`0x665B70`/`0x667740`/`0x667C08`/`0x669F78` 各 11×`0x20`=`0x160` 字节，特别断言 `0x6613EE` 与 `0x6613EC`；断言「开启小兵培养」开关写 `0x40CAEF`/`0x40BF25` 的值在 `0x32`/`0x00` 之间切换），**反向验证通过**（临时加回 `0x6613EE` 写入 → 测试报 `FAILED: no recorded write overlaps a static id table region` → 恢复 → 全绿）。**A4 归因更正**：§12.4 与本表先前那条「禁用 `unk_42C894` 即消除 `0x5B6754`」是**错误归因**（已被 12:48 dump 证伪：禁用之后仍崩同一地址），已在 `_INJECTION_FIX_NOTES.md` §12.4/§13 与本表就地加更正注记；`PLAN.md`/`CHANGELOG.md`/`DESIGN.md`/`REQUIREMENTS_1_4.md` 里 `0x6613EE` 的错误定址一并更正。**验证**：Debug + Release 构建、`--all assets/config` `exit=0`、`--ui-smoke` `exit=0`、Publish 构建通过、`out/trial/` 已重新出包。清理了 52 个 `tools/_*.py` 与 `武将提拔/{res_144.bin, plugin_try.bin, doc_text.txt}`（`res_135.bin` 保留供 T3 解密用）。**实机验证待用户执行**。 |
 | 2026-11-02 | **兵法抵挡 bug 根因定位并修复 + 熟练度指示图标 + 用户手册**。**① 兵法抵挡**（用户报告「熟练度高的人发动兵法被熟练度低的人抵挡」+「兵法发动概率设置没有生效」两个症状）：根因是**把握概率挂错了骰子**——游戏有抵抗骰（`0x4FEB20` 内 `0x4FEB95`，eax≠0 即抵抗成立）与发动骰（`0x4FEBB0` 内 `0x4FEC5C`，失败即 return 0 不发动）两枚，旧版把把握概率挂在**抵抗骰** `0x4FEB90` 并强制 `eax=1` ⇒ 勾选后**必定被抵挡**且熟练度完全不参与，同时发动骰从未被 hook ⇒ 把握概率勾了也没效果。**一个根因两个症状**。修复：恢复 `0x4FEB90` 原版字节 `BE 0A 00 00 00`，把握概率改挂发动骰 `0x4FEC59`（命中则跳过掷骰、`mov eax,1`、返回 `0x4FEC5E`；未命中原样重放），日志打印 `resist roll restored` 作佐证。**关键栈账约束**：`kakuritsu` 是 `__cdecl`（导出名 `?kakuritsu@@YAHHW4RANDOM_KIND@@H@Z`），原版 `0x4FEC5E` 的 `add esp,0x14` 清 5 个压栈，命中路径**必须照原版压 `0xB` 与 `edx`**。桩 58 字节，`arrayAddrOffset=0x15`、`extraJumpRelOffset=0x28`（rel32 **字段**偏移；`tools/asm_check.py` 的 `rel32` 用的是 E9 **操作码**偏移 0x27/0x35，两套约定勿混用）。**② 熟练度指示图标**（用户 Request F，原文四档：无 / ★（1000<上限≤1500）/ ◎（上限>1500）/ ○（该系有缩短发动间隔，优先级最高））：调查确认**可复用的图标位图 = 0 个**——游戏只有 12×10/33×11 光标位图、2019 工具 `San9PKHard.exe` 无任何位图、原版 `SanIXPKCheat.exe` 的 25 BITMAP + 17 ICON 是打包加密无法提取；且原版那 9 个 8×8 控件（id 1096–1104）实为 `BS_CHECKBOX` 复选框（`sub_404C70.c` 的 `DDX_Check` 证据），绑定的是**「精通」标志位**（`sub_405130.c`）而非熟练度阈值 ⇒ 两个原始二进制都不存在 ★/☆/○/●/◎/环 梯度。实现改用**宋体 Unicode 字形**（★ U+2605、◎ U+25CE、○ U+25CB）：新增 `IDC_PROFICIENCY_MARK_1..9`（1252–1260）+ 对话框 132 的 9 个 Static + `OfficerPersonalization2026::systemSkills`（9 系→兵法表 id 的权威映射：步兵 0-2/骑兵 3-5/弓骑 6-8/弩兵 9-11/水军 12-14/攻城 15-18/智略 19-22/谋略 23-26/策略 27-30，31-40 为特殊兵法不归属任何系）+ `Pages.cpp` 的实时刷新 + 新增 `proficiencyMarkerTest()`。**③ 用户手册**：新增 `docs/用户手册.md`（9 节；56 开关 + 32 数值参数由 `src/generated/parameter_fields.inc` + `recovery/resources/dialogs.json` **程序化生成**，不手写）。**验证**：Debug/Release/Publish 三配置构建 + `--all assets/config` + `--ui-smoke` 全绿（EXIT=0），`out/trial/` 已刷新。清理遗留分析中间产物 15 个（`msg_*.txt` 5、`ref_*.txt` 4、`sanpkcheat/*.txt` 6）。 |
+| 2026-11-07 | **1047 重新接线：「玩家蛮族阵型」替换「电脑用蛮族阵型」**。用户要求：「用玩家用蛮族阵型替换掉」旧的「电脑用蛮族阵型」，改完发版，并要开始逐功能实机测试（先测玩家蛮族阵型）。**关键发现：两者是完全不同的机制** —— 旧功能（2019 的 `m_bEnableBaramArray`）走 `codeUseBaramArray`（88 字节块，`AllocationBase+0x3EA0`），重写**每个部队**的阵型指针 `[ecx+0x6C]`（掷骰 `0x4AEFF0` + 阵型记录查表 `0x453890`），开关方式是改块首字节 `0x56`(执行)/`0xC3`(立即返回)；新功能改的是**阵型属性跳转表** `0x4FB5DC` 的 12/13/14 三项。**改动**：①`Runtime2026::applyBarbarianFormation()` 重写 —— 生效条件 = ini `BarbarianFormation` **AND** 设置窗口复选框 1047，**任一关掉就把 12/13/14 写回游戏原始值 `0x4FB5D3`**（`mov eax,0x3C3; ret`，已用 `San9PK.exe` 逐字节核对）；写回而不是「不再写」是必须的，因为桩在伴侣进程的游戏分配区里，只改不还原会留下野指针。②`RuntimeInjection2026.cpp` 删掉旧的 `EnableBaramArrayEnabled` 写，改为**固定写 `0xC3`**（旧功能永久停用）。③注入名 `EnableBaramArrayEnabled` → `PlayerBarbarianFormation`（`src/model/InjectionNames2026.json` → `src/generated/InjectionNames2026.h`）。④`parameters.json` 里 1047 的 caption 改为「启用玩家蛮族阵型」；`tools/recover_parameters.py` 现在把 caption 过一遍 `dialog_customizations.control_title()`（顺手补上 1160 的「鬥舰」→「斗舰」规则，**修掉了 `Verify.ps1` 里一个从 326098d 就存在的失败**）。⑤`barbarianFormationTest()` 扩到 5 种情形（ini 关/复选框开、两者都开、复选框开→关、关→开、旧代码块首字节恒 `0xC3`）。⑥文档：`docs/HANDOVER.md` 新增 §4.12、`docs/KNOWLEDGE_BASE.md` 新增 §7.4/§7.5 + 一条「已被推翻的结论」、`docs/LIVE_TEST_PLAN.md` 的 T3 写清两个开关的关系与可逆性、`CHANGELOG.md`、`San9Features.ini`、`out/trial/使用说明.txt`。**验证**：Debug/Release/Publish 三配置构建通过；`--all assets/config` exit=0；`tools/check_injection_blocks.py` 12 blocks 0 problems；`powershell -NoProfile -ExecutionPolicy Bypass -File ./Verify.ps1` **31 tests OK**（此前 `test_generated_metadata_current` 在 HEAD 上就已失败，本轮修好）；`out/trial/` 已重新出包。**实机验证待用户执行**（T3 玩家蛮族阵型）。**注意**：本轮**未提交**（用户自己提交）。 |

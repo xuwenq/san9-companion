@@ -72,5 +72,9 @@ inline constexpr unsigned BarbarianFormationCases[] = {12, 13, 14};
 inline constexpr std::uint32_t NormalFormationAttribute = 0x3CCu;
 // 异族阵型原本的属性 id。
 inline constexpr std::uint32_t BarbarianFormationAttribute = 0x3C3u;
+// 跳转表里 12/13/14 三项**原本**就指向游戏自己的 0x4FB5D3 段代码
+//（"mov eax,0x3C3; ret"）。关闭本功能时必须把这个原始值写回去，
+//否则游戏里会留下一个指向伴侣进程内存的野指针。
+inline constexpr std::uint32_t OriginalBarbarianFormationEntry = 0x4FB5D3u;
 
 }  // namespace san9

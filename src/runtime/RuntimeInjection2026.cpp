@@ -1336,7 +1336,12 @@ void Runtime2026::applyParameterPatches()
   writePatch((char *)dword_42F140 + 14, &patchValue, 2u);
   patchValue = *(_DWORD *)(state + san9::injection2026::AlikeKillerLinkageEnabled) != 0 ? 0xE : 0;
   writePatch((char *)dword_42F36C + 1, &patchValue, 1u);
-  patchValue = *(_DWORD *)(state + san9::injection2026::EnableBaramArrayEnabled) != 0 ? 86 : 195;
+  // 原版工具的「电脑用蛮族阵型」(m_bEnableBaramArray, 参数 1047) 已被
+  // 「启用玩家蛮族阵型」取代：原功能会重写每个部队的阵型指针
+  // (codeUseBaramArray / dword_42F1A8)，与玩家选阵型无关。
+  // 现在这个代码块固定为「否」：把首字节改成 0xC3 (ret) 让它直接返回，
+  // 不再改写部队的阵型指针。1047 由 applyBarbarianFormation() 消费。
+  patchValue = 195;  // 0xC3
   writePatch(dword_42F1A8, &patchValue, 1u);
   selectedEnableRelayDispatchIndexBias = -(*(_DWORD *)(state + san9::injection2026::EnableRelayDispatchEnabled) != 0);
   selectedEnableRelayDispatchIndexBias = (selectedEnableRelayDispatchIndexBias & ~0xFF) | ((selectedEnableRelayDispatchIndexBias & 0x8A) & 0xFF);

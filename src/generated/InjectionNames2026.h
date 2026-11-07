@@ -16,8 +16,8 @@ inline constexpr std::size_t EnableRelayDispatchEnabled = 164;
 inline constexpr std::size_t DispatchSoldierToPlayerEnabled = 168;
 // parameter control 1054: 禁止“遇到华佗”; legacy: m_bDisableSearchEvent
 inline constexpr std::size_t DisableSearchEventEnabled = 172;
-// parameter control 1047: 启用电脑蛮族阵型; legacy: m_bEnableBaramArray
-inline constexpr std::size_t EnableBaramArrayEnabled = 176;
+// parameter control 1047: 启用玩家蛮族阵型; legacy: m_bEnableBaramArray
+inline constexpr std::size_t PlayerBarbarianFormation = 176;
 // parameter control 1057: 减少玩家攻陷都市时所获钱粮; legacy: m_bSubRobFood
 inline constexpr std::size_t SubRobFoodEnabled = 180;
 // parameter control 1059: 开启迷雾; legacy: m_bWarFog

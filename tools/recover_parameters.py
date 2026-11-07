@@ -7,6 +7,7 @@ import json
 import re
 
 from project_paths import PROJECT_ROOT, SOURCE_ROOT
+from dialog_customizations import control_title
 def recover():
     def source(va):
         return (PROJECT_ROOT / f'recovery/evidence/decompiled/sub_{va}.c').read_text(encoding='utf-8')
@@ -81,7 +82,9 @@ def recover():
     for row in file_fields:
         row.update(controls[row['dialog_offset']])
         row['default'] = defaults[row['host_offset']]
-        row['caption'] = captions[row['control_id']]
+        # The caption is the original resource's title, with the intentional
+        # UI customizations applied (see tools/dialog_customizations.py).
+        row['caption'] = control_title(131, row['control_id'], captions[row['control_id']])
     assert {r['host_offset'] for r in file_fields} == set(range(148, 500, 4))
     inputs = ['4191C0', '409430', '418810', '403780', '402F80', '403FF0']
     return dict(schema_version=1, file_lines=34, fields=file_fields,

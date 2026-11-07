@@ -2124,53 +2124,77 @@ void configFilesTest();
 // We redirect those three entries to our own stub that returns 0x3CC, the
 // attribute Shape.exe uses.  The other 25 entries must keep pointing at the
 // game's code, so ordinary formations are untouched.
+//
+// Two switches control the feature: the ini switch "BarbarianFormation" and
+// the settings check box 1047.  Both must be on.  When either is off the
+// three entries are written back to the game's original value 0x4FB5D3, so
+// the feature can be turned off again at runtime.
 void barbarianFormationTest() {
+    // Collect the last value written to each of the three table entries.
+    struct TableWrites {
+        DWORD values[3]={0,0,0};
+        unsigned counts[3]={0,0,0};
+        bool otherEntryTouched=false;
+    };
+    auto collect=[&](TableWrites& out) {
+        for(const auto& entry:recordedWrites) {
+            if(entry.second.size()!=4) continue;
+            const DWORD target=entry.first;
+            if(target<san9::FormationAttributeJumpTable) continue;
+            if(target>=san9::FormationAttributeJumpTable+san9::FormationAttributeCount*4) continue;
+            const unsigned index=(target-san9::FormationAttributeJumpTable)/4;
+            if(index!=12 && index!=13 && index!=14) { out.otherEntryTouched=true; continue; }
+            DWORD value=0;
+            std::memcpy(&value,entry.second.data(),4);
+            out.values[index-12]=value;
+            ++out.counts[index-12];
+        }
+    };
+
+    // The ini switch off: the check box alone must not enable the feature.
     resetBackend();
     Runtime2026 runtime(api());
     version(runtime);
     san9::FeatureSwitches2026 switches;
     switches[san9::Feature2026::barbarianFormation]=false;
     runtime.setFeatureSwitches(switches);
+    san9::ParameterConfig config;
+    config.set(1047,1);
+    runtime.setParameters(config);
     recordWrites=true;
     initialModify(runtime);
     recordWrites=false;
-
-    bool tableTouched=false;
-    for(const auto& entry:recordedWrites) {
-        const DWORD target=entry.first;
-        if(target>=san9::FormationAttributeJumpTable &&
-           target<san9::FormationAttributeJumpTable+san9::FormationAttributeCount*4)
-            tableTouched=true;
+    {
+        TableWrites table;
+        collect(table);
+        check(!table.otherEntryTouched,"the barbarian switch off leaves the other formation entries alone");
+        check(table.values[0]==san9::OriginalBarbarianFormationEntry,
+            "the ini switch off restores the original formation table entry");
     }
-    check(!tableTouched,"the barbarian switch off leaves the formation table alone");
 
-    // Now with the switch on.
+    // Both switches on: the three entries point at our stub.
     resetBackend();
     Runtime2026 runtime2(api());
     version(runtime2);
     runtime2.setFeatureSwitches(san9::FeatureSwitches2026{});
+    san9::ParameterConfig config2;
+    config2.set(1047,1);
+    runtime2.setParameters(config2);
     recordWrites=true;
     initialModify(runtime2);
     recordWrites=false;
-
-    // Collect the writes that land on the three table entries.
     DWORD stubAddress=0;
-    for(const auto& entry:recordedWrites) {
-        if(entry.second.size()!=4) continue;
-        const DWORD target=entry.first;
-        if(target<san9::FormationAttributeJumpTable) continue;
-        if(target>=san9::FormationAttributeJumpTable+san9::FormationAttributeCount*4) continue;
-        const unsigned index=(target-san9::FormationAttributeJumpTable)/4;
-        if(index!=12 && index!=13 && index!=14) {
-            check(false,"only the barbarian entries of the formation table are rewritten");
-            continue;
-        }
-        DWORD value=0;
-        std::memcpy(&value,entry.second.data(),4);
-        stubAddress=value;
+    {
+        TableWrites table;
+        collect(table);
+        check(!table.otherEntryTouched,"only the barbarian entries of the formation table are rewritten");
+        check(table.values[0]==table.values[1] && table.values[1]==table.values[2],
+            "the three barbarian entries of the formation table are redirected");
+        stubAddress=table.values[0];
     }
-    check(stubAddress!=0,"the barbarian entries of the formation table are redirected");
-    if(stubAddress) {
+    check(stubAddress!=0 && stubAddress!=san9::OriginalBarbarianFormationEntry,
+        "the barbarian entries of the formation table are redirected");
+    if(stubAddress && stubAddress!=san9::OriginalBarbarianFormationEntry) {
         // The stub must live inside the game's allocation and return 0x3CC.
         const BYTE stub[]={0xB8,0xCC,0x03,0x00,0x00,0xC3};
         bool found=false;
@@ -2181,6 +2205,45 @@ void barbarianFormationTest() {
         }
         check(found,"the redirected formation entries point at a stub that returns 0x3CC");
     }
+
+    // The check box off while the ini switch stays on: the feature must be
+    // switched off again and the original entries restored.
+    san9::ParameterConfig config3;
+    config3.set(1047,0);
+    runtime2.setParameters(config3);
+    recordWrites=true;
+    runtime2.modify(ModifyReason2026::ParametersConfirmed);
+    recordWrites=false;
+    {
+        TableWrites table;
+        collect(table);
+        check(table.values[0]==san9::OriginalBarbarianFormationEntry &&
+              table.values[1]==san9::OriginalBarbarianFormationEntry &&
+              table.values[2]==san9::OriginalBarbarianFormationEntry,
+            "clearing the check box restores the original formation table entries");
+    }
+
+    // The check box on again: the feature comes back.
+    san9::ParameterConfig config4;
+    config4.set(1047,1);
+    runtime2.setParameters(config4);
+    recordWrites=true;
+    runtime2.modify(ModifyReason2026::ParametersConfirmed);
+    recordWrites=false;
+    {
+        TableWrites table;
+        collect(table);
+        check(table.values[0]!=0 && table.values[0]!=san9::OriginalBarbarianFormationEntry,
+            "ticking the check box re-applies the barbarian formation patch");
+    }
+
+    // The old "computer uses barbarian formations" feature is gone: the
+    // uploaded block is always disabled, whatever the check box says.
+    // The block lives in the allocation at base+0x3EA0; writing 0xC3 (ret)
+    // as its first byte makes it return immediately.
+    check(load(base+0x3EA0,1)==0xC3,
+        "the legacy computer barbarian array block stays disabled");
+
     std::puts("Barbarian formation table redirection checks passed.");
 }
 

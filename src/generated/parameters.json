@@ -299,7 +299,7 @@
       "minimum": 0,
       "maximum": 1,
       "default": 0,
-      "caption": "启用电脑蛮族阵型"
+      "caption": "启用玩家蛮族阵型"
     },
     {
       "line": 15,

@@ -21,6 +21,12 @@ def control_title(dialog_id, control_id, original):
         # the player can pick the barbarian formations too.
         assert original == "启用电脑蛮族阵型", original
         return "启用玩家蛮族阵型"
+    if (dialog_id, control_id) == (131, 1160):
+        # 「鬥舰不能发动"箭岚"」->「斗舰不能发动"箭岚"」.
+        # The original resource is traditional Chinese; the companion uses
+        # simplified captions throughout, so this one character is converted.
+        assert original == "鬥舰不能发动“箭岚”", original
+        return "斗舰不能发动“箭岚”"
     return original
 
 

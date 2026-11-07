@@ -5,7 +5,88 @@
 > 逐功能实机清单见 `docs/LIVE_TEST_PLAN.md`。
 > 本文件只是快速索引。
 
-## 2026-11-07 本轮完成（B 修 bug → C 开关 → A 知识资产化）
+## 2026-11-07 第二轮：1047 重新接线（「玩家蛮族阵型」替换「电脑用蛮族阵型」）
+
+> 用户原话：「是的，改完给我发版」「我要开始逐个测试了，首先我会测试 玩家蛮族阵型这个」
+> 「的旧功能（2019 工具的「电脑用蛮族阵型」**不需要保留**」
+> 「相当于用玩家用蛮族阵型 **替换掉**」
+
+### 0. 一句话
+
+**1047 从「驱动旧的电脑蛮族阵型」改成「驱动玩家蛮族阵型」，
+并且真的能开/关（旧功能彻底停用）。发版完成，实机待用户测 T3。**
+
+### 1. 最重要的结论：旧功能和新功能是两套机制
+
+| | 旧：电脑用蛮族阵型 | 新：玩家蛮族阵型 |
+|---|---|---|
+| 注入名 | `m_bEnableBaramArray` | `PlayerBarbarianFormation`（`state+176`）|
+| 代码块 | `codeUseBaramArray` 88B @ `Alloc+0x3EA0` | 6B 桩 @ `Alloc+0xA000` |
+| 改什么 | 每个**部队**的阵型指针 `[ecx+0x6C]` | 阵型属性**跳转表** `0x4FB5DC` 的 12/13/14 |
+| 手段 | 掷骰 `0x4AEFF0` + 查表 `0x453890` | 3 个 dword 指向返回 `0x3CC` 的桩 |
+| 开关 | 块首字节 `0x56`/`0xC3` | ini 开关 AND 复选框 1047 |
+
+**别把两者搞混**——这是接手的人最容易踩的坑。
+
+### 2. 开关逻辑（两个开关都要开）
+
+```
+生效 = ini 的 BarbarianFormation  AND  设置窗口的复选框 1047
+```
+
+任一关掉 → 12/13/14 **写回游戏原值 `0x4FB5D3`**。
+
+> **必须写回，不能只是「不再写」**：桩在伴侣进程的游戏分配区里。
+> 只改不还原 = 游戏里留着指向伴侣进程的指针，伴侣退出后 → 野指针崩溃。
+
+日志：
+```
+FEATURE barbarianFormation : on,  entries 12/13/14 now return 0x3CC (stub at 0x...)
+FEATURE barbarianFormation : off, entries 12/13/14 restored to 0x4FB5D3
+                               (the ini switch is off)      ← ini 关
+                               (the check box 1047 is off)  ← 复选框关
+```
+
+### 3. 改了哪些文件
+
+| 文件 | 改动 |
+|---|---|
+| `src/runtime/Runtime2026.cpp` | `applyBarbarianFormation()` 重写（两个开关 + 写回原值）|
+| `src/runtime/RuntimeInjection2026.cpp` | 删旧写；固定写 `0xC3`（旧功能永久停用）|
+| `src/runtime/BarbarianFormation2026.h` | 新增 `OriginalBarbarianFormationEntry = 0x4FB5D3` |
+| `src/generated/InjectionNames2026.h` | `EnableBaramArrayEnabled` → `PlayerBarbarianFormation` |
+| `src/model/InjectionNames2026.json` | 同上（改了跑 `python tools/injection_names.py`）|
+| `src/generated/parameters.json` | 1047 caption → 「启用玩家蛮族阵型」 |
+| `tools/dialog_customizations.py` | 1047 规则；**新增 1160「鬥舰」→「斗舰」** |
+| `tools/recover_parameters.py` | caption 过 `control_title()` |
+| `tests/runtime_test.cpp` | `barbarianFormationTest()` 扩到 5 种情形 |
+| `San9Features.ini` / `out/trial/使用说明.txt` | 说明两个开关的关系 |
+| `docs/HANDOVER.md` §4.12 / `docs/KNOWLEDGE_BASE.md` §7.4 §7.5 / `docs/LIVE_TEST_PLAN.md` T3 / `CHANGELOG.md` | 文档 |
+
+### 4. 顺手修掉的一个旧失败
+
+`Verify.ps1` 里的 `test_generated_metadata_current` **在 HEAD（29b3e88）上就已经失败**：
+提交进仓的 `parameters.json` 里 1160 的 caption 是简体「斗舰」，
+而资源证据（`recovery/resources/dialogs.json`）里是繁体「鬥舰」。
+本轮把 caption 生成改为过 `control_title()`，并补上 1160 的简化规则 → **31 tests OK**。
+
+### 5. 验证结果
+
+- Debug / Release / Publish 三配置构建通过
+- `--all assets/config` → **exit=0**
+- `tools/check_injection_blocks.py` → **12 blocks, 0 problems**
+- `powershell -NoProfile -ExecutionPolicy Bypass -File ./Verify.ps1` → **31 tests OK**
+- `out/trial/` 已重新出包（Publish exe + `San9Features.ini` + 6 个配置 + 使用说明）
+
+### 6. 下一步（用户正在做的事）
+
+**实机跑 `docs/LIVE_TEST_PLAN.md` 的 T3（玩家蛮族阵型）**，
+然后按 T1…T11 顺序逐个测。每测完一项，把结果写回
+`docs/LIVE_TEST_PLAN.md` 的验证状态表 + `docs/HANDOVER.md` §0 速览。
+
+---
+
+## 2026-11-07 第一轮完成（B 修 bug → C 开关 → A 知识资产化）
 
 ### 0. 本轮总览
 
@@ -150,6 +231,32 @@
 ⚠️ `.rc` **不能**用 `tools/reconstruct.py` 重新生成（会丢掉手工布局改动，
 并把简体「斗舰」变回繁体「鬥舰」），要改就直接编辑 `.rc`。
 
+**两个开关 + 可逆（2026-11-07 补充）**
+
+生效条件 = ini `BarbarianFormation` **AND** 复选框 1047。
+任一关掉 → 12/13/14 **写回游戏原始值 `0x4FB5D3`**（`mov eax,0x3C3; ret`），
+日志 `FEATURE barbarianFormation : off, entries 12/13/14 restored to 0x4FB5D3
+(the ini switch is off | the check box 1047 is off)`。
+
+> **为什么必须写回**：桩在伴侣进程的游戏分配区里。只改不还原 = 游戏里留着
+> 指向伴侣进程的指针，伴侣退出后就是野指针 → 崩溃。
+
+**旧功能「电脑用蛮族阵型」已移除（2026-11-07）**
+
+用户要求「用玩家用蛮族阵型替换掉」旧的「电脑用蛮族阵型」。
+两者是**完全不同的机制**：
+
+| | 旧功能（已移除） | 新功能 |
+|---|---|---|
+| 作用对象 | 每个**部队**的阵型指针 `[ecx+0x6C]` | 阵型**属性跳转表** `0x4FB5DC` 的 12/13/14 |
+| 手段 | 掷骰 `0x4AEFF0` + 查表 `0x453890` | 3 个 dword 指向返回 `0x3CC` 的桩 |
+| 开关 | 代码块首字节 `0x56`(执行) / `0xC3`(返回) | ini 开关 AND 复选框 1047 |
+
+- 旧代码块仍上传，但首字节**恒为 `0xC3`**（永不执行）
+- 注入名字 `EnableBaramArrayEnabled` → `PlayerBarbarianFormation`
+  （`src/model/InjectionNames2026.json` → `src/generated/InjectionNames2026.h`）
+- `src/generated/parameters.json` 里 1047 的 caption 也改成「启用玩家蛮族阵型」
+
 ### 6. 开关拆分粒度（按用户批准的"你倾向的拆开"）
 
 | 开关 | 控制的东西 |
@@ -179,7 +286,7 @@
 - `--all assets/config` **exit=0**（全部通过）
 - `--barbarian-formation` 通过
 - `--proficiency-mark-injection` 通过
-- `tools/check_injection_blocks.py` 11 块 0 问题
+- `tools/check_injection_blocks.py` 12 块 0 问题
 - Release + Publish 构建通过，`out/trial/` 已重新出包（含 `San9Features.ini`）
 
 **测试文件历史事故**：`git checkout tests/runtime_test.cpp` 曾经把

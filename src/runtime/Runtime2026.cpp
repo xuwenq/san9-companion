@@ -515,54 +515,71 @@ void Runtime2026::applyCultivate() {
 }
 
 void Runtime2026::applyBarbarianFormation() {
-    // Feature switch: when off, nothing is written at all.
-    if (!featureEnabled(san9::Feature2026::barbarianFormation)) {
-        appendRuntimeLog("FEATURE barbarianFormation : off, nothing is written");
-        return;
-    }
-    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
-    if (!process) return;
-
     // The game looks the formation attribute up in a 28-entry jump table at
     // 0x4FB5DC.  Entries 12, 13 and 14 return 0x3C3, an attribute that only
     // the barbarian factions own, so a normal faction cannot pick them.
     //
-    // We point those three entries at our own three-instruction stub that
-    // returns 0x3CC (the attribute Shape.exe uses for every formation).  The
-    // other 25 entries keep pointing at the game's own code, so ordinary
-    // formations are unaffected.
+    // We point those three entries at our own stub that returns 0x3CC (the
+    // attribute Shape.exe uses for every formation).  The other 25 entries
+    // keep pointing at the game's own code, so ordinary formations are
+    // unaffected.
     //
-    // The stub lives in our executable's image and is copied into the game's
-    // allocation, so the jump table entry must point at the copy, not at the
-    // original.
+    // The stub lives in the game's allocation, so the jump table entry must
+    // point at the copy inside the game process.
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
+
+    // Two switches have to agree before the patch is applied:
+    //   * the ini file switch "BarbarianFormation" (the per-feature master
+    //     switch used to isolate a live test), and
+    //   * the settings dialog check box 1047 (启用玩家蛮族阵型).
+    // The check box alone must be able to turn the feature on, so the
+    // effective state is the AND of the two.
+    const auto state = reinterpret_cast<std::uintptr_t>(state_.data());
+    const bool requested = *reinterpret_cast<const DWORD *>(state + san9::injection2026::PlayerBarbarianFormation) != 0;
+    const bool enabled = requested && featureEnabled(san9::Feature2026::barbarianFormation);
+
+    // The three entries the game owns.  12/13/14 all point at the game's own
+    // stub 0x4FB5D3 ("mov eax,0x3C3; ret"); writing that value back restores
+    // the original behaviour exactly.
     static const BYTE stub[] = {
         0xB8, 0xCC, 0x03, 0x00, 0x00,  // mov eax,0x3CC
         0xC3                              // ret
     };
-    const DWORD allocation = field<DWORD>(san9::layout2026::AllocationBase);
-    if (!allocation) {
-        appendRuntimeLog("FEATURE barbarianFormation : on, but no allocation is available yet");
-        return;
-    }
-    // The stub goes into our executable's image, but the jump table entries
-    // must point at the copy inside the game process.  The allocation is
-    // PAGE_EXECUTE_READWRITE and 11 pages (0xB000); the highest offset in use
-    // is the 188-byte icon block at 0x6960, so 0xA000 is free.
-    const DWORD stubAddress = allocation + 0xA000u;
-    if (!writeBytes(process, reinterpret_cast<LPVOID>(stubAddress), stub, sizeof(stub))) {
-        appendRuntimeLog("FEATURE barbarianFormation : the stub could not be written");
-        return;
+
+    DWORD entryValue = san9::OriginalBarbarianFormationEntry;
+    if (enabled) {
+        const DWORD allocation = field<DWORD>(san9::layout2026::AllocationBase);
+        if (!allocation) {
+            appendRuntimeLog("FEATURE barbarianFormation : on, but no allocation is available yet");
+            return;
+        }
+        // The allocation is PAGE_EXECUTE_READWRITE and 11 pages (0xB000); the
+        // highest offset in use is the 188-byte icon block at 0x6960, so
+        // 0xA000 is free.
+        const DWORD stubAddress = allocation + 0xA000u;
+        if (!writeBytes(process, reinterpret_cast<LPVOID>(stubAddress), stub, sizeof(stub))) {
+            appendRuntimeLog("FEATURE barbarianFormation : the stub could not be written");
+            return;
+        }
+        entryValue = stubAddress;
     }
     for (const unsigned index : san9::BarbarianFormationCases) {
         const DWORD target = san9::FormationAttributeJumpTable + index * 4u;
-        if (!writeBytes(process, reinterpret_cast<LPVOID>(target), &stubAddress, 4u)) {
+        if (!writeBytes(process, reinterpret_cast<LPVOID>(target), &entryValue, 4u)) {
             appendRuntimeLogFormat("FEATURE barbarianFormation : the jump table entry ",
                 unsigned(index), " could not be written");
             return;
         }
     }
-    appendRuntimeLogFormat("FEATURE barbarianFormation : on, entries 12/13/14 now return 0x",
-        unsigned(san9::NormalFormationAttribute), " (stub at 0x", unsigned(stubAddress), ")");
+    if (enabled) {
+        appendRuntimeLogFormat("FEATURE barbarianFormation : on, entries 12/13/14 now return 0x",
+            unsigned(san9::NormalFormationAttribute), " (stub at 0x", unsigned(entryValue), ")");
+    } else {
+        appendRuntimeLogFormat("FEATURE barbarianFormation : off, entries 12/13/14 restored to 0x",
+            unsigned(san9::OriginalBarbarianFormationEntry),
+            requested ? " (the ini switch is off)" : " (the check box 1047 is off)");
+    }
 }
 
 void Runtime2026::applyProficiencyCap() {
