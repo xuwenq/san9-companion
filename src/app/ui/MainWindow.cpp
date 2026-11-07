@@ -34,6 +34,9 @@ class MainWindow final : public ui::Dialog
         tooltip(IDC_STATUS, L"悬停查看运行状态与失败详情。");
         if (!smoke)
         {
+            // The per-feature switches are read once, before anything is
+            // injected, so a test run only exercises the features that are on.
+            app.loadFeatureSwitches(san9::featureSwitchesFile());
             // The trace switch is persisted, so a session that was left in
             // detailed mode resumes in detailed mode without extra steps.
             setRuntimeLogTrace(preference(L"Diagnostics", L"LogWrites", false));

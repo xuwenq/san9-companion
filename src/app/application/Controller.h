@@ -42,6 +42,10 @@ class Controller final
     bool commitSkills(const san9::SkillConfig &value);
     bool commitFormations(const san9::FormationConfig &value);
     bool commitPresentationSpeed(unsigned multiplier);
+    // Per-feature switches, read from San9Features.ini next to the executable.
+    // They are applied once at start-up and are never written back.
+    void loadFeatureSwitches(const std::filesystem::path &file);
+    const san9::FeatureSwitches2026 &featureSwitches() const { return runtime_.featureSwitches(); }
     void poll();
     void applyConfirmedConfiguration();
     bool gameMessage(UINT message, WPARAM action, LPARAM argument);

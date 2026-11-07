@@ -1,6 +1,7 @@
 #include "Controller.h"
 #include "../../runtime/AppPaths.h"
 #include "../../runtime/Runtime2026.h"
+#include "../../runtime/FeatureSwitches2026.h"
 namespace app
 {
 Controller::Controller(ProcessApi2026 api) : runtime_(api)
@@ -52,6 +53,16 @@ ApplicationState Controller::state() const
 {
     return {runtime_.session().phase, runtime_.session().result, runtime_.configurationState(),
             queued_ != 0 || epoch_ != runtime_.configurationEpoch(), confirmationPending_};
+}
+void Controller::loadFeatureSwitches(const std::filesystem::path &file)
+{
+    const auto switches = san9::loadFeatureSwitches(file);
+    runtime_.setFeatureSwitches(switches);
+    // The summary is a plain "1 0 1 ..." line whose order matches the ini file,
+    // so a log line can be read side by side with the file.
+    appendRuntimeLogFormat("FEATURES: file=", narrow(file.wstring()),
+        " summary=", switches.summary(),
+        " (1=on 0=off)");
 }
 std::vector<ConfigLoadError> Controller::load(bool automatic, bool skipSelection, ComputerWorkTiming2026 timing,
                                            DeathGradient2026 deathGradient, GrowthBoost2026 growthBoost,

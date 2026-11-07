@@ -29,6 +29,7 @@
 #include "ThreadBarrier2026.h"
 #include "DeathGradient2026.h"
 #include "GrowthBoost2026.h"
+#include "FeatureSwitches2026.h"
 #include "Cultivate2026.h"
 #include "OfficerPersonalization2026.h"
 
@@ -132,6 +133,11 @@ public:
     void setGrowthBoost(GrowthBoost2026 value) { growthBoost_ = value; }
     void setCultivate(Cultivate2026 value) { cultivate_ = value; }
     void setPersonalization(OfficerPersonalization2026 value) { personalization_ = value; }
+    // Per-feature switches.  A feature that is off is not injected at all, so
+    // a live test of one feature is not disturbed by the others.
+    void setFeatureSwitches(san9::FeatureSwitches2026 value) { featureSwitches_ = value; }
+    const san9::FeatureSwitches2026& featureSwitches() const { return featureSwitches_; }
+    bool featureEnabled(san9::Feature2026 feature) const { return featureSwitches_[feature]; }
     void setPresentationSpeed(unsigned multiplier);
     void setParameters(const san9::ParameterConfig& parameters);
     san9::PersonConfig personConfig() const;
@@ -190,12 +196,20 @@ private:
     GrowthBoost2026 growthBoost_;
     Cultivate2026 cultivate_;
     OfficerPersonalization2026 personalization_;
+    san9::FeatureSwitches2026 featureSwitches_;
     void applyComputerWorkTiming();
     void applyDeathGradient();
     void applyGrowthBoost();
     void applyCultivate();
+    void applyBarbarianFormation();
     void applyProficiencyCap();
+    void applyProficiencyMarks();
     void applyOfficerPersonalization();
+    // The three per-officer personalisation features are separate switches so
+    // that each can be tested on its own.
+    void applyActivationBoost();
+    void applyCriticalHit();
+    void applyInterval();
     // Writes one log line per configured officer, so the log alone proves
     // which personalization values were actually applied.
     void logPersonalizationSummary();

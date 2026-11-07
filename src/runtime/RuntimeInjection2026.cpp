@@ -434,12 +434,19 @@ void Runtime2026::installCoreHooks()
   writePatch(dword_42F140, &unk_4289E0, 0x22u);
   writePatch(dword_42F13C, &unk_428A30, 0x98u);
   writePatch(dword_42F12C, &codeGetLeagueGoal, 0xBCu);
+  // 小兵培养：基础能力系数反转。特征开关 cultivateBasicAbility 关闭时上传
+  // 原版字节（sub），游戏保持原版行为。
   writePatch(dword_42F11C, &codeTrainBasicAbility, 0x37u);
-  // Reverse the basic-ability coefficient: "sub" -> "add" so a larger
-  // coefficient strengthens the trained officer instead of weakening it.
-  const BYTE addOpcode = 0x00;
-  writePatch(reinterpret_cast<char *>(dword_42F11C) + 0x1D, &addOpcode, 1u);
-  writePatch(reinterpret_cast<char *>(dword_42F11C) + 0x2E, &addOpcode, 1u);
+  if (featureEnabled(san9::Feature2026::cultivateBasicAbility)) {
+    // Reverse the basic-ability coefficient: "sub" (0x28) -> "add" (0x00).
+    // Both opcodes share the ModRM byte, so the length does not change.
+    const BYTE addOpcode = 0x00;
+    writePatch(reinterpret_cast<char *>(dword_42F11C) + 0x1D, &addOpcode, 1u);
+    writePatch(reinterpret_cast<char *>(dword_42F11C) + 0x2E, &addOpcode, 1u);
+    appendRuntimeLog("FEATURE cultivateBasicAbility : on, the coefficient is reversed");
+  } else {
+    appendRuntimeLog("FEATURE cultivateBasicAbility : off, the original coefficient is kept");
+  }
   writePatch(dword_42F10C, &unk_429050, 0x2Du);
 }
 
@@ -1079,7 +1086,12 @@ void Runtime2026::installGameplayPatches()
   writePatch(*(LPVOID *)(state + san9::injection2026::AvoidNearCityAddr), stateBytes(san9::injection2026::AvoidNearCity, 2u), 2u);
   writePatch(*(LPVOID *)(state + san9::injection2026::RetreatMinVigourAddr), stateBytes(san9::injection2026::RetreatMinVigour, 1u), 1u);
   writePatch(*(LPVOID *)(state + san9::injection2026::SelectCleverKillerAddr), stateBytes(san9::injection2026::SelectCleverKiller, 1u), 1u);
-  writePatch(*(LPVOID *)(state + san9::injection2026::NeglectChongCheAddr), (LPCVOID)(state + (skipDurabilitySiegeSelection_ ? 6828 : 6832)), 1u);
+  // 跳过耐久攻城选择。开关关闭时保持原版分支，不改写这处指针。
+  if (featureEnabled(san9::Feature2026::skipSiegeSelection)) {
+    writePatch(*(LPVOID *)(state + san9::injection2026::NeglectChongCheAddr), (LPCVOID)(state + (skipDurabilitySiegeSelection_ ? 6828 : 6832)), 1u);
+  } else {
+    appendRuntimeLog("FEATURE skipSiegeSelection : off, the original branch is kept");
+  }
   writePatch(*(LPVOID *)(state + san9::injection2026::SameForceTroopAddr), stateBytes(san9::injection2026::SameForceTroop, 1u), 1u);
   writePatch(*(LPVOID *)(state + san9::injection2026::SameForceTroopAddr2), stateBytes(san9::injection2026::SameForceTroop, 1u), 1u);
   writePatch(*(LPVOID *)(state + san9::injection2026::AttackIgnoreAntitrapAddr), stateBytes(san9::injection2026::AttackIgnoreAntitrap, 1u), 1u);
@@ -1192,9 +1204,15 @@ void Runtime2026::applyParameterPatches()
   writePatch((LPVOID)0x43F88F, stateBytes(san9::injection2026::CounselorReportCoef, 1u), 1u);
   writePatch(*(LPVOID *)(state + 4828), &dword_42D948, 0x190u);
   writePatch(*(LPVOID *)(state + 4832), &byte_42DAD8, 0x32u);
-  patchValue = *(_DWORD *)(state + san9::injection2026::EnableTrainEnabled) != 0 ? 0x32 : 0;
-  writePatch(*(LPVOID *)(state + 6224), &patchValue, 1u);
-  writePatch(*(LPVOID *)(state + 6228), &patchValue, 1u);
+  // 「开启小兵培养」= 强制提拔。写 0x40CAEF / 0x40BF25 = 0x32 / 0，与原版工具一致。
+  // 特征开关 cultivateTrainNum 关闭时不写，游戏保持原版行为。
+  if (featureEnabled(san9::Feature2026::cultivateTrainNum)) {
+    patchValue = *(_DWORD *)(state + san9::injection2026::EnableTrainEnabled) != 0 ? 0x32 : 0;
+    writePatch(*(LPVOID *)(state + 6224), &patchValue, 1u);
+    writePatch(*(LPVOID *)(state + 6228), &patchValue, 1u);
+  } else {
+    appendRuntimeLog("FEATURE cultivateTrainNum : off, 0x40CAEF / 0x40BF25 are not written");
+  }
   if ( *(_DWORD *)(state + san9::injection2026::AllPersonLiveEnabled) != 0 )
     patchValue = *(_DWORD *)(state + san9::injection2026::AllPersonLive);
   else
@@ -1218,7 +1236,9 @@ void Runtime2026::applyParameterPatches()
   applyDeathGradient();
   applyGrowthBoost();
   applyCultivate();
+  applyBarbarianFormation();
   applyProficiencyCap();
+  applyProficiencyMarks();
   applyOfficerPersonalization();
   patchValue = *(_DWORD *)(state + san9::injection2026::FriendToAlienateEnabled) == 0;
   writeDescriptor(0x424D20u + 12 * (patchValue), PatchSource2026::CompanionAddress);

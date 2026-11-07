@@ -1,6 +1,8 @@
 #include "Runtime2026.h"
 #include "../model/PatchImage.h"
 #include "AppPaths.h"
+#include "ProficiencyMark2026.h"
+#include "BarbarianFormation2026.h"
 #include "RuntimeDiagnostics2026.h"
 #include <algorithm>
 #include <cstring>
@@ -309,7 +311,8 @@ void Runtime2026::modify(ModifyReason2026 reason) {
         applyPresentationSpeed();
         // The recovered patch site is in the initial-connection branch only.
         // Live confirmation must update it in the same rollback transaction.
-        if (updateExtension && process_.state().process) {
+        if (updateExtension && process_.state().process &&
+            featureEnabled(san9::Feature2026::skipSiegeSelection)) {
             const BYTE instruction = skipDurabilitySiegeSelection_ ? 0x33 : 0x85;
             writeMemory(process_.state().process, 0x4B87EBu, &instruction, 1, nullptr);
         }
@@ -325,6 +328,10 @@ bool Runtime2026::readGameMemory(DWORD address, void* buffer, SIZE_T size) {
     }
 }
 void Runtime2026::applyComputerWorkTiming() {
+    if (!featureEnabled(san9::Feature2026::computerWorkTiming)) {
+        appendRuntimeLog("FEATURE computerWorkTiming : off, nothing is injected");
+        return;
+    }
     // RE-SAN9PK-0174: metadata bytes 0/1 are initial delay/calendar period.
     // Advanced difficulty halves the delay in the game's shared eligibility gate.
     const std::array<BYTE, 2> reward = computerWorkTiming_.improveRewards
@@ -335,6 +342,11 @@ void Runtime2026::applyComputerWorkTiming() {
 }
 
 void Runtime2026::applyDeathGradient() {
+    // Feature switch: when off, nothing is injected at all.
+    if (!featureEnabled(san9::Feature2026::deathGradient)) {
+        appendRuntimeLog("FEATURE deathGradient : off, nothing is injected");
+        return;
+    }
     // RE-SAN9PK death gradient: when "高能武将可阵亡" is enabled, the original
     // single-stat chance (min(30, 80 - [officer+0x50])) is replaced by a MAX(四维)
     // gradient (min(lowRate, threshold - MAX)). MAX is already in EAX at the
@@ -374,6 +386,11 @@ void Runtime2026::applyDeathGradient() {
     }
 }
 void Runtime2026::applyGrowthBoost() {
+    // Feature switch: when off, nothing is injected at all.
+    if (!featureEnabled(san9::Feature2026::growthBoost)) {
+        appendRuntimeLog("FEATURE growthBoost : off, nothing is injected");
+        return;
+    }
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
     if (!process) return;
 
@@ -463,29 +480,97 @@ void Runtime2026::applyGrowthBoost() {
 }
 
 void Runtime2026::applyCultivate() {
+    // 培养时长 has its own switch because it is not implemented yet.
+    if (featureEnabled(san9::Feature2026::cultivateDuration))
+        appendRuntimeLog("FEATURE cultivateDuration : on (but the duration is NOT applied: "
+                         "no verified game address exists)");
+    else
+        appendRuntimeLog("FEATURE cultivateDuration : off");
     const auto state = reinterpret_cast<std::uintptr_t>(state_.data());
     const bool enabled = *(DWORD *)(state + san9::injection2026::EnableTrainEnabled) != 0;
-    const BYTE duration = enabled
-        ? static_cast<BYTE>((std::min)((std::max)(cultivate_.durationRounds, 3u), 12u))
-        : static_cast<BYTE>(9);
-    // 培养时长(旬). The address below is an unverified guess, not a reverse
-    // engineered one: it lives in the .data BSS region, has zero references
-    // inside the PE and no pointer in .data aims at it.
-    //   ⚠️ 未验证地址：PE 内零引用、无指针指向、位于 .data BSS；
-    //     若实机再崩，先删这行
-    writePatch(reinterpret_cast<LPVOID>(0x14FA656u), &duration, 1u);
-    appendRuntimeLogFormat("CULTIVATE: enabled=", enabled ? "yes" : "no",
-        " durationRounds=", unsigned(duration), " written at 0x014FA656 (unverified address)");
+    // 培养时长(旬) is NOT implemented.
+    //
+    // The 2019 tool has no such feature (its only "train" knob is the number
+    // of soldiers to train), so there is no reference implementation to copy
+    // an address from.  The previous version wrote the value to 0x14FA656 --
+    // an address we had guessed.  That guess is **wrong**: 0x14FA656 is RVA
+    // 0xFA656, which lies inside .text (VA 0x401000..0x5FF000), i.e. it is
+    // a byte of *game code*, not a variable.  Writing 9 there every time the
+    // configuration was applied corrupted the game.
+    //
+    // The value is kept in the configuration (Cultivate2026::durationRounds)
+    // so the UI and the file format stay stable, but nothing is written to
+    // the game until a real address is reverse engineered.
+    //
+    // 强制小兵培养 is implemented by RuntimeInjection2026.cpp:1170-1172, which
+    // writes 0x40CAEF / 0x40BF25 = 0x32 / 0 exactly like the original tool.
     // This function no longer writes a 小兵 activation flag.  The former write
     // to 0x6613EE was the root cause of crash #4: 0x6613EE is byte index 2 of
     // the id dword at 0x6613EC (value 0x000003E8, id 1000), so writing 1 there
     // turned the id into 0x000103E8, the lookup at 0x5B7050 then failed and
     // getflag at 0x5B72F0 dereferenced a null entry.
-    // 强制小兵培养 is implemented by RuntimeInjection2026.cpp:1170-1172, which
-    // writes 0x40CAEF / 0x40BF25 = 0x32 / 0 exactly like the original tool.
+    appendRuntimeLogFormat("CULTIVATE: enabled=", enabled ? "yes" : "no",
+        " durationRounds=", unsigned(cultivate_.durationRounds),
+        " (duration is NOT applied: no verified game address exists)");
+}
+
+void Runtime2026::applyBarbarianFormation() {
+    // Feature switch: when off, nothing is written at all.
+    if (!featureEnabled(san9::Feature2026::barbarianFormation)) {
+        appendRuntimeLog("FEATURE barbarianFormation : off, nothing is written");
+        return;
+    }
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
+
+    // The game looks the formation attribute up in a 28-entry jump table at
+    // 0x4FB5DC.  Entries 12, 13 and 14 return 0x3C3, an attribute that only
+    // the barbarian factions own, so a normal faction cannot pick them.
+    //
+    // We point those three entries at our own three-instruction stub that
+    // returns 0x3CC (the attribute Shape.exe uses for every formation).  The
+    // other 25 entries keep pointing at the game's own code, so ordinary
+    // formations are unaffected.
+    //
+    // The stub lives in our executable's image and is copied into the game's
+    // allocation, so the jump table entry must point at the copy, not at the
+    // original.
+    static const BYTE stub[] = {
+        0xB8, 0xCC, 0x03, 0x00, 0x00,  // mov eax,0x3CC
+        0xC3                              // ret
+    };
+    const DWORD allocation = field<DWORD>(san9::layout2026::AllocationBase);
+    if (!allocation) {
+        appendRuntimeLog("FEATURE barbarianFormation : on, but no allocation is available yet");
+        return;
+    }
+    // The stub goes into our executable's image, but the jump table entries
+    // must point at the copy inside the game process.  The allocation is
+    // PAGE_EXECUTE_READWRITE and 11 pages (0xB000); the highest offset in use
+    // is the 188-byte icon block at 0x6960, so 0xA000 is free.
+    const DWORD stubAddress = allocation + 0xA000u;
+    if (!writeBytes(process, reinterpret_cast<LPVOID>(stubAddress), stub, sizeof(stub))) {
+        appendRuntimeLog("FEATURE barbarianFormation : the stub could not be written");
+        return;
+    }
+    for (const unsigned index : san9::BarbarianFormationCases) {
+        const DWORD target = san9::FormationAttributeJumpTable + index * 4u;
+        if (!writeBytes(process, reinterpret_cast<LPVOID>(target), &stubAddress, 4u)) {
+            appendRuntimeLogFormat("FEATURE barbarianFormation : the jump table entry ",
+                unsigned(index), " could not be written");
+            return;
+        }
+    }
+    appendRuntimeLogFormat("FEATURE barbarianFormation : on, entries 12/13/14 now return 0x",
+        unsigned(san9::NormalFormationAttribute), " (stub at 0x", unsigned(stubAddress), ")");
 }
 
 void Runtime2026::applyProficiencyCap() {
+    // Feature switch: when off, nothing is injected at all.
+    if (!featureEnabled(san9::Feature2026::proficiencyCap)) {
+        appendRuntimeLog("FEATURE proficiencyCap : off, nothing is injected");
+        return;
+    }
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
     if (!process) return;
 
@@ -600,11 +685,151 @@ void Runtime2026::logPersonalizationSummary() {
     }
 }
 
+void Runtime2026::applyProficiencyMarks() {
+    // Feature switch: when off, nothing is injected at all.
+    if (!featureEnabled(san9::Feature2026::proficiencyMark)) {
+        appendRuntimeLog("FEATURE proficiencyMark : off, nothing is injected");
+        return;
+    }
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
+
+    // 游戏内熟练度指示图标。
+    //
+    // 原版（2019 工具）在这里放了一段 140 字节的 codePersonCharNum，装在注入分配区的
+    // 0x6960 处，由游戏 0x451A5C 处的一个 call 调用。它在熟练度数字前面插入 4 字节的
+    // 图标前缀，图标用的是游戏字体（CP950）的两字节字符：
+    //   a1 b8 = ☆ 空心五角星（原生「精通」标志位 [esi+0xE8] 置位时）
+    //   a1 b7 = ◎ 同心圆（等级表该系为第 4 档「精进」时）
+    // 游戏本体并没有这个图标，关掉 companion 就没有 —— 与用户观察一致。
+    //
+    // 现在这段代码改成：
+    //   * 用户给该武将该系配了熟练度上限或发动间隔 -> 用 companion 自己的图标
+    //   * 没配 -> 沿用原生标记（精通 -> ☆，精进 -> ◎）
+    // 图标规则与修改器界面共用 ProficiencyMark2026，两边显示必须一致。
+    //
+    // 做法与熟练度上限 hook 相同：宿主算一张表传进去，再把判定段换成查表。
+    // 这里用 4 字节前缀表而不是 1 字节码表，因为前缀里还要带两个空格。
+
+    // 没配任何图标时不需要动那块代码：原版 140 字节块本身画的就是原生标记
+    // （精通 -> ☆，精进 -> ◎），与「未配置就回落原生」的语义完全一致。
+    // 这样也就不必再分配一块内存，undo 的资源计数保持不变。
+    size_t configured = 0;
+    for (size_t o = 0; o < 800; ++o)
+        for (size_t s = 0; s < 9; ++s)
+            if (san9::ProficiencyMarkFor(personalization_, o, s) !=
+                san9::ProficiencyMark2026::unconfigured) ++configured;
+    if (configured == 0) {
+        appendRuntimeLog("PROFICIENCY MARK: no configured cell, the native mark block is kept");
+        return;
+    }
+
+    // 每格的前缀（4 字节）。0 表示「未配置」，游戏里回落到原生标记。
+    std::array<std::uint32_t, 800 * 9> markFlat{};
+    for (size_t o = 0; o < 800; ++o)
+        for (size_t s = 0; s < 9; ++s) {
+            const auto mark = san9::ProficiencyMarkFor(personalization_, o, s);
+            markFlat[o * 9 + s] = san9::ProficiencyMarkPrefix2026[static_cast<std::size_t>(mark)];
+        }
+
+    // 未配置的格子必须为 0（游戏里据此回落原生），其余按规则给前缀。
+    const size_t tableBytes = markFlat.size() * sizeof(std::uint32_t);
+    const size_t codeBytes = 188;
+    const auto region = allocateMemory(process, nullptr, tableBytes + codeBytes,
+                                       MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!region) {
+        appendRuntimeLog("PROFICIENCY MARK: allocation of the icon table failed");
+        return;
+    }
+    const DWORD tableAddr = reinterpret_cast<DWORD>(region);
+    const DWORD codeAddr = tableAddr + static_cast<DWORD>(tableBytes);
+    writePatch(reinterpret_cast<LPVOID>(tableAddr), markFlat.data(), tableBytes);
+
+    // 判定段（由 out/_re/gen.py 标签汇编生成，capstone 逐条核对）。
+    // 结构与原版 140 字节完全一致：同样的守卫条件、同样的「预留 4 字节」、
+    // 同样的「数字右移并补空格」，只是把判定图标的两处换成了查表。
+    //
+    // ⚠️ 四个守卫跳转必须是 **近跳转**（0F 84/8C/8F rel32），不能用短跳转。
+    // 原版 140 字节块的 `end` 在 0x88，第一个守卫在 0x07，位移正好 127 —— 有符号
+    // rel8 的上限，**纯属侥幸**。本块比原版长，位移会超过 127，rel8 字节被解释成
+    // 负数 → CPU 跳到块外 → 访问违例（2026-11-07 实机崩溃就是这个原因）。
+    static const BYTE code[codeBytes] = {
+        0x8B,0x2F,0x8B,0xCB,0xF6,0xC1,0x01,0x0F,0x85,0xAB,0x00,0x00,
+        0x00,0xD0,0xE9,0x80,0xF9,0x31,0x0F,0x8C,0xA0,0x00,0x00,0x00,
+        0x80,0xF9,0x39,0x0F,0x8F,0x97,0x00,0x00,0x00,0x80,0x7C,0x24,
+        0x2C,0x38,0x0F,0x85,0x8C,0x00,0x00,0x00,0x80,0x44,0x24,0x5C,
+        0x04,0xBF,0x20,0x20,0x20,0x20,0x80,0xE9,0x31,0x0F,0xB6,0xC9,
+        0x0F,0xB7,0x46,0x04,0x3D,0x20,0x03,0x00,0x00,0x77,0x12,0x6B,
+        0xC0,0x09,0x03,0xC1,0x8B,0x3C,0x85,0x00,0x00,0x00,0x00,0x85,
+        0xFF,0x74,0x02,0xEB,0x3A,0x8B,0x86,0xE8,0x00,0x00,0x00,0xC1,
+        0xE8,0x03,0xD3,0xE8,0x24,0x01,0x74,0x05,0xBF,0xA1,0xB8,0x20,
+        0x20,0x83,0xF9,0x04,0x7F,0x21,0x0F,0xB7,0x46,0x04,0x3D,0x20,
+        0x03,0x00,0x00,0x7F,0x16,0x8B,0x04,0x85,0x00,0x00,0x00,0x00,
+        0xD0,0xE1,0xD3,0xE8,0x24,0x03,0x3C,0x03,0x75,0x05,0xBF,0xA1,
+        0xB7,0x20,0x20,0x8B,0x45,0x00,0x89,0x7D,0x00,0x8B,0x4D,0xF8,
+        0x83,0xE9,0x04,0xF7,0xD9,0x85,0xC9,0x7E,0x08,0xC1,0xE0,0x08,
+        0xB0,0x20,0x49,0xEB,0xF4,0x89,0x45,0x04,0xC6,0x45,0x08,0x00,
+        0xC6,0x45,0xF8,0x08,0x8B,0x45,0xF8,0xC3
+    };
+
+    // 等级表（person_config_info）在分配区的 0x4000 处，与原版读的是同一个地址
+    // （2019 工具的 dwAddrStackBottom = 0xA0000，person_config_info = 0xA4000）。
+    const DWORD levelTable = field<DWORD>(san9::layout2026::AllocationBase) + 0x4000u;
+
+    BYTE bytes[codeBytes];
+    std::memcpy(bytes, code, codeBytes);
+    std::memcpy(bytes + 0x4F, &tableAddr, 4);   // mov edi,[eax*4+iconTable] 的 disp32 (指令 0x4C，占 3 字节)
+    std::memcpy(bytes + 0x80, &levelTable, 4);  // mov eax,[eax*4+levelTable] 的 disp32 (指令 0x7D，占 3 字节)
+    writePatch(reinterpret_cast<LPVOID>(codeAddr), bytes, codeBytes);
+
+    // 原版把这段代码放在分配区的 0x6960（从游戏 0x451A5C 用 call 调用）。
+    // 新代码 188 字节，放不进 0x6960..0x6A00（那里紧邻 codeMoveGuardTroop），
+    // 所以改成在 0x6960 放一个 5 字节的 jmp 跳板，跳到新地址。
+    const DWORD slot = field<DWORD>(san9::layout2026::AllocationBase) + 0x6960u;
+    BYTE jump[5] = {0xE9, 0x00, 0x00, 0x00, 0x00};
+    const int rel = static_cast<int>(codeAddr - (slot + 5));
+    std::memcpy(jump + 1, &rel, 4);
+    writePatch(reinterpret_cast<LPVOID>(slot), jump, sizeof(jump));
+
+    appendRuntimeLogFormat("PROFICIENCY MARK: configured cells=", configured,
+        " table=", runtimeLogAddress(tableAddr),
+        " code=", runtimeLogAddress(codeAddr),
+        " slot=", runtimeLogAddress(slot),
+        " codeSize=", codeBytes,
+        " jump=", hexBytes(jump, sizeof(jump)),
+        " tableBytes=", tableBytes);
+
+    // 逐个列出配置了图标的格子，日志里能直接看出每个武将每个系画的是什么。
+    for (size_t o = 0; o < 800; ++o)
+        for (size_t s = 0; s < 9; ++s) {
+            const auto mark = san9::ProficiencyMarkFor(personalization_, o, s);
+            if (mark == san9::ProficiencyMark2026::unconfigured) continue;
+            appendRuntimeLogFormat("PROFICIENCY MARK officer=", o, " system=", s,
+                " mark=", static_cast<int>(mark),
+                " prefix=", hexBytes(reinterpret_cast<const BYTE*>(&markFlat[o * 9 + s]), 4));
+        }
+}
+
 void Runtime2026::applyOfficerPersonalization() {
     const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
     if (!process) return;
 
     logPersonalizationSummary();
+
+    // The three per-officer features are separate functions with separate
+    // switches so that each one can be tested without the others.
+    applyActivationBoost();
+    applyCriticalHit();
+    applyInterval();
+}
+
+void Runtime2026::applyActivationBoost() {
+    if (!featureEnabled(san9::Feature2026::activationBoost)) {
+        appendRuntimeLog("FEATURE activationBoost : off, nothing is injected");
+        return;
+    }
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
 
     // 提升兵法发动机会把握概率。
     //
@@ -668,6 +893,16 @@ void Runtime2026::applyOfficerPersonalization() {
                           boostCode, sizeof(boostCode), 0x15,
                           "activationBoost", 0x28);
 
+}
+
+void Runtime2026::applyCriticalHit() {
+    if (!featureEnabled(san9::Feature2026::criticalHit)) {
+        appendRuntimeLog("FEATURE criticalHit : off, nothing is injected");
+        return;
+    }
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
+
     // 兵法威力一定加倍(出动画)：hook 0x50603B（`add esp,0xC; test eax,eax`）。
     // stub 沿 [esi+0x80] → [+0x88] 链表逐节点取 CPersonData → word[+4] 查 criticalHit；
     // 命中则 eax=1 并保留 esi（战斗单位），返回 0x506040。
@@ -709,6 +944,16 @@ void Runtime2026::applyOfficerPersonalization() {
                           criticalOriginal, sizeof(criticalOriginal), 0x506040u,
                           criticalCode, sizeof(criticalCode), 0x2B,
                           "criticalHit", 0x42);
+
+}
+
+void Runtime2026::applyInterval() {
+    if (!featureEnabled(san9::Feature2026::interval)) {
+        appendRuntimeLog("FEATURE interval : off, nothing is injected");
+        return;
+    }
+    const auto process = field<HANDLE>(san9::layout2026::ProcessHandle);
+    if (!process) return;
 
     // 发动间隔(天, per-skill)：hook 0x4FF08B（`idiv ecx`）。esi=CPersonData → word[+4]
     // 取武将索引、[ebx+0x34] 取技能ID；intervalFlat 用 0xFF 标记"未自定义"。

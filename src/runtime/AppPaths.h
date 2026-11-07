@@ -18,4 +18,8 @@ inline std::filesystem::path executableFile(const wchar_t* name) {
 inline std::filesystem::path preferencesFile() {
     return executableFile(L"San9PKHardSettings.ini");
 }
+// 逐功能开关文件。与可执行文件同目录，启动时读取一次，运行期不再写回。
+inline std::filesystem::path featureSwitchesFile() {
+    return executableFile(L"San9Features.ini");
+}
 }

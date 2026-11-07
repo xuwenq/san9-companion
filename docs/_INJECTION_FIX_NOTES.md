@@ -705,3 +705,99 @@ push edx   (0x4FEC5B)
 - `tests/runtime_test.cpp` 的 `injectionCodeBytesTest` 断言新字节、拒绝旧字节；
 - Debug / Release / Publish 三种配置构建通过，`--all assets/config` 与 `--ui-smoke` 均 exit=0；
 - **实机验证仍待用户执行**（见 `docs/HANDOVER.md` §4.8 的验证清单）。
+
+---
+
+## 15. 游戏内 ☆/◎/○ 指示图标：绘制代码定位与重写（2026-11-07）
+
+> 需求 F 的后半段：修改器界面已有熟练度指示图标，但**游戏武将列表里画的**那些图标
+> 是 companion 注入的另一段代码。本节记录它的位置、被推翻的两条旧结论，
+> 以及重写后的 172 字节判定块。
+
+### 15.1 游戏本体没有 ☆/★ 字形
+
+游戏的字符表 `0x61CFA0..0x61CFF8`（**Big5/CP950**）只含
+`U+FF19..U+FF10`、`•`(0x61CFD0)、`＊`(0x61CFD4)、`？`(0x61CFDC)、`完`(0x61CFE4)、
+`未`(0x61CFE8)、`△`(0x61CFEC)、`◎`(0x61CFF0)、`○`(0x61CFF4)、`×`(0x61CFF8)。
+
+**CP950 编码（本项目必须记住）**：
+**☆ U+2606 = `a1 b8`、★ U+2605 = `a1 b9`、◎ U+25CE = `a1 b7`、
+○ U+25CB = `a1 b3`、△ U+25B3 = `a1 b5`、× = `a1 d1`、： = `a1 47`、？ = `a1 48`**
+
+（早先误用 Big5 `a1 49` 找 ★，得出「游戏里没有 ★」的错误结论，已纠正。）
+
+### 15.2 绘制代码 = 2019 工具遗产 `codePersonCharNum`（140 字节）
+
+| 项 | 位置 |
+| --- | --- |
+| 2019 源码 | `recovery/reference-2019/InsertAsm.h:10230`（`dwAddrPersonCharNum = dwAddrStackBottom + 0x6900`） |
+| companion 镜像 | `src/generated/companion_data.bin` 偏移 `0x6F88`（companion VA `0x425F88`） |
+| 运行时落点 | `RuntimeInjection2026.cpp:415` `writePatch(dword_42F270, &codePersonCharNum, 0x8Cu)` ⇒ **注入分配区 `allocationBase+0x6960`** |
+| 进入路径 | descriptor `0x426028`（`{target=0x451A5C, len=5, source=0x426014}`）把游戏 `0x451A5C` 的 `mov edx,[edi]; mov eax,[edx-8]` 换成 `call 0xA6960` |
+
+**⚠️ 两条被推翻的旧结论**：
+
+1. 「140 字节覆盖游戏 `0x425F88`」**错**。`PatchCatalog.h` 的 `StaticWrite` 字段顺序是
+   `{callVA, functionVA, targetVA, sourceVA, size, bytes}` ⇒ 那行
+   `{0x0040C163, 0x00409E10, 0x000A6960, 0x00425F88, 140, ...}`
+   的 **target = `0xA6960`（注入分配区）**、**source = `0x425F88`（companion 镜像位置）**。
+   全仓核实：**没有任何代码写游戏 VA `0x425F88`**，游戏那 140 字节原样未动。
+   `PatchCatalog.h` 也没有被任何 `src/` 文件 include（只是 `tools/reconstruct.py` 生成的审计产物）。
+2. 「必须 live 取证才能定位」**不成立** —— 静态就能查到。
+
+### 15.3 原版 140 字节块的判定逻辑（完整反汇编）
+
+```
+mov  ebp,[edi]              ; 文本缓冲
+mov  ecx,ebx / test cl,1    ; 守卫：ebx 必须为偶
+shr  cl,1 ; cmp cl,'1'/'9'  ; 守卫：系统号 1..9
+cmp  byte [esp+0x2C],'8'    ; 守卫：必须是「熟练度」那一行
+add  byte [esp+0x5C],4      ; 给图标预留 4 字节
+mov  edi,0x20202020         ; 默认 4 个空格（无图标）
+mov  eax,[esi+0xE8]         ; 原生「精通」标志位（位 3..11 = 9 个系）
+shr  eax,cl ; and al,1
+mov  edi,0x2020B8A1         ; "  " + a1 b8 = ☆   ← 原生精通
+; 再查 companion 自己的等级表 0xA4000[officer] 的 2bit*系 == 3
+mov  edi,0x2020B7A1         ; "  " + a1 b7 = ◎   ← 原生精进（覆盖 ☆）
+```
+
+**它和熟练度上限数值毫无关系**：☆ 由原生「精通」位决定，◎ 由等级表第 4 档决定。
+
+### 15.4 用户确认的口径（2026-11-07）
+
+1. **配置优先，未配置回落原生**：配了上限或间隔 → companion 的图标；
+   没配 → 原生标记（精通 → ☆，精进 → ◎）。
+2. **两边都用空心 ☆ U+2606**（与 `build/res/tags.PNG` 一致）。
+3. **任意熟练度上限设计保留**，不做 1300/1600 分档。
+
+### 15.5 落地实现
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/runtime/ProficiencyMark2026.h`（新） | 修改器与游戏内**共用**的规则：`ProficiencyMarkFor` / `ProficiencyMarkPrefix2026` / `ProficiencyMarkText2026`。五档 `unconfigured/none/star/refined/interval`，前缀 `0 / 0x20202020 / 0x2020B8A1 / 0x2020B7A1 / 0x2020B3A1` |
+| `src/runtime/Runtime2026.cpp` | 新增 `applyProficiencyMarks()`：算 `uint32[800*9]` 前缀表 → 上传 → 写 172 字节判定块 → 在 `allocationBase+0x6960` 放 5 字节 `E9` 跳板 |
+| `src/runtime/RuntimeInjection2026.cpp` | 在 `applyProficiencyCap()` 之后调用 `applyProficiencyMarks()` |
+| `src/app/ui/Pages.cpp` | `proficiencyMark()` 改为复用共享规则；**实心 ★ U+2605 → 空心 ☆ U+2606** |
+| `tests/runtime_test.cpp` | 新增 `--proficiency-mark-injection`；`--proficiency-marker` 改断言共享规则 |
+
+**为什么用跳板**：172 字节 > 原槽位 `0x6960..0x6A00` 的 160 字节，会压到
+`codeMoveGuardTroop@0x6A00`。跳板（5 字节 `E9`）是 `applyOfficerPersonalization` 里
+间隔 hook 用的同一套路。
+
+**注入空间核算**：注入分配区 `0xA0000..0xB0000` 共 45KB，已占 33.2KB，
+空闲连续段有 `0x095E..0x10000`（**22.2KB**）等。图标表 `uint32[800*9]` = 28.8KB
+放不进分配区，所以图标表 + 判定块一起放进 `applyProficiencyMarks` 自己新分配的一块内存，
+分配区只放 5 字节跳板。**空间充足，无需新方案。**
+
+**一个格子都没配时不替换块**：原版 140 字节块画的本来就是原生标记，语义一致；
+且这样不会多分配内存 —— 否则 undo 的 release 计数会从 1 变 2，
+`runtime_test.cpp` 的 `undo releases allocation and handle` 会挂（这个坑踩过一次）。
+
+### 15.6 验证
+
+- 字节级用 capstone 逐条核对（生成脚本为一次性工具，未入库）；
+- `tests/runtime_test.cpp` 的 `proficiencyMarkInjectionTest`（`--proficiency-mark-injection`）
+  断言图标表内容、**188** 字节块关键指令、CP950 字形、5 字节跳板；
+- Debug / Release / Publish 三种配置构建通过，`--all assets/config` 与 `--ui-smoke` 均 exit=0；
+- **实机验证仍待用户执行**：游戏武将列表里确认 ① 配置过的格子显示 ☆/◎/○；
+  ② 没配置的格子仍显示原生 ☆/◎；③ 无崩溃。

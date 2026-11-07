@@ -4,6 +4,120 @@
 
 ## [未发布]
 
+### 修复（图标崩溃，2026-11-07）
+
+- **实机崩溃：打开武将列表就崩**。转储坐实（`San9PK.exe.29292.dmp`，异常码 `0xC0000005`，
+  读地址 `0x02227028`，而我们的图标块在 `0x02227080`）。
+  根因：172 字节图标块里 4 个守卫跳转的位移是 159 / 152 / 147 / 140，
+  **全部超过 x86 rel8 的有符号上限 127**。`0x9F` 被解释成 **−97**，
+  CPU 跳到块外 88 字节 → 访问违例。
+  原版 140 字节块的位移**恰好**是 127（有符号上限），纯属侥幸。
+  **修复**：4 个守卫跳转改**近跳转**（`0F 84` / `0F 8C` / `0F 8F`，rel32），
+  块 172 → **188 字节**。disp32 偏移：图标表 @ **0x4F**，等级表 @ **0x80**。
+  修复过程中把 disp32 写到 `0x4B` 而不是 `0x4F`，被新增的测试断言当场抓住。
+- **删除错误的培养时长写入**：`0x14FA656` 是**猜出来的**地址，且是错的 ——
+  RVA `0xFA656` 落在 `.text` 段，它是**游戏代码的一个字节**，不是变量。
+  之前每次应用配置都往那儿写 9，**一直在改坏游戏代码**。
+  2019 版工具**根本没有**培养时长功能（只有 `m_dwTrainNumAddr` `0x40CAEF` /
+  `m_dwTrainNumAddr2` `0x40BF25` / `m_dwOldTrainNum` 50）。
+  现在删除该写入，配置项保留但不生效，日志明说。
+- 新增 `tools/check_injection_blocks.py`：读 `src/runtime/Runtime2026.cpp` 里的
+  `const BYTE xxx[] = {...}`，用 capstone 反汇编，断言每条跳转
+  ① 落在指令边界 ② 在块内 ③ rel32 占位（全 0）跳过。
+  当前 **11 个块，0 个问题**。
+
+### 新增（逐功能开关，2026-11-07）
+
+- 新增 `San9Features.ini`（仓库根目录，与 exe 同目录）：**13 个逐功能开关**，
+  用于一个一个地测功能、排除干扰项。
+  段名 `[Features]`，值**只认精确的 `0` / `1`**，其它值一律当 off
+  （手误不应该打开一个功能）；缺键 = 默认（默认全部 on ⇒ 空文件 ≡ 开关引入前的行为）。
+  **启动时读一次**，运行期不再写回。
+- 新增 `src/runtime/FeatureSwitches2026.{h,cpp}`：
+  `enum class Feature2026`（deathGradient / growthBoost / cultivateTrainNum /
+  cultivateBasicAbility / cultivateDuration / proficiencyCap / proficiencyMark /
+  activationBoost / criticalHit / interval / barbarianFormation /
+  computerWorkTiming / skipSiegeSelection）、
+  `loadFeatureSwitches(path)`、`summary()`（输出 "1 0 1 ..." 供日志对照）。
+- 开关关闭 = **完全不注入**（不是「注入了但不起作用」），
+  日志 `FEATURE xxx : off, nothing is injected`；
+  另有一行 `FEATURES: file=... summary=...` 可与 ini 逐项对照。
+- `applyOfficerPersonalization` **拆成 3 个独立函数**
+  `applyActivationBoost` / `applyCriticalHit` / `applyInterval`，各自有开关。
+- 加载路径：`src/runtime/AppPaths.h` 的 `featureSwitchesFile()` →
+  `Controller::loadFeatureSwitches(path)` → `MainWindow.cpp` 启动时调用。
+
+### 新增（玩家蛮族阵型，2026-11-07）
+
+- 逆向坐实：游戏用 **28 项跳转表 `0x4FB5DC`** 查阵型属性
+  （入口 `0x4FB560`，唯一调用点 `0x4FBEB6`）。
+  **12 / 13 / 14 号阵型返回异族专用属性 `0x3C3`**，所以普通势力选不了。
+- 实现：把这 3 项改指向我们自己的 6 字节桩
+  `B8 CC 03 00 00 C3`（`mov eax,0x3CC; ret`），桩放在 `AllocationBase + 0xA000`；
+  **其余 25 项原样不动** → 普通阵型完全不受影响。
+  比第三方修改器 `Shape.exe` 温和（它把 `0x4FB564` 改成 `mov eax,0x3CC`，
+  **整个函数恒返回 0x3CC，所有阵型属性都被抹平**）。
+- 界面字幕：`assets/ui/dialogs.rc` 控制 1047 由「启用电脑蛮族阵型」
+  改为「**启用玩家蛮族阵型**」（`tools/dialog_customizations.py` 同步）。
+- 回归测试：新增 `--barbarian-formation`（开关关时跳转表不动；
+  开关开时只有 12/13/14 被改写，且指向返回 `0x3CC` 的桩）。
+
+### 文档（2026-11-07）
+
+- 新增 `docs/KNOWLEDGE_BASE.md` —— **逆向结论的单一可信来源**：
+  地址→用途→证据→置信度总表、CP950 字形表、
+  **x86 注入陷阱库**（rel8 有符号！rel32 字段偏移约定不同！栈平衡！…）、
+  已被推翻的结论、注入代码地图、实机验证状态表。
+- 新增 `docs/LIVE_TEST_PLAN.md` —— 逐功能实机验证清单：
+  每项写清「开哪些开关 / 期望结果 / 怎么判断」，含二分法定位步骤。
+- `out/trial/` 已重新出包（Publish 静态 CRT exe + 6 个配置 + `San9Features.ini` +
+  更新后的 `使用说明.txt`）。
+
+### 变更（游戏内 ★/◎/○ 指示图标，2026-11-07）
+
+- **定位到游戏内图标的绘制代码**：2019 工具遗产 `codePersonCharNum`（140 字节，
+  `recovery/reference-2019/InsertAsm.h:10230`），companion 把同样的字节装在**注入分配区**
+  `allocationBase+0x6960`（`RuntimeInjection2026.cpp:415`），并通过 descriptor `0x426028`
+  把游戏 `0x451A5C` 改写成 `call 0xA6960` 进入它。
+  图标是 **CP950 两字节字符**：☆ = `a1 b8`、◎ = `a1 b7`、○ = `a1 b3`，
+  **游戏本体没有这些字形**（游戏字符表 `0x61CFA0..0x61CFF8` 只有 `• ＊ ？ 完 未 △ ◎ ○ ×`）。
+- **纠正两条此前的错误结论**：
+  ① 「140 字节覆盖游戏 `0x425F88`」是**错的**——`PatchCatalog.h` 的 `StaticWrite`
+  字段顺序是 `{callVA, functionVA, targetVA, sourceVA, size, bytes}`，
+  target 是 `0xA6960`（分配区）、source 是 `0x425F88`（companion 镜像位置）；
+  ② 「必须 live 取证」不成立，静态就能查到（`PatchCatalog.h` 也没有被任何 `src/` include）。
+- **重写判定段**：新增 `Runtime2026::applyProficiencyMarks()`，宿主算一张
+  `uint32[800*9]` 前缀表上传，再写判定块（capstone 逐条核对），
+  并在 `allocationBase+0x6960` 放 5 字节 `E9` 跳板
+  （判定块放不进 160 字节的原槽位，会压到 `codeMoveGuardTroop@0x6A00`）。
+  > ⚠️ 这段最初的版本是 **172 字节**，当天实机即崩溃（rel8 溢出），已修成 **188 字节**，见上。
+- **口径（用户确认）**：配置优先、**未配置回落原生**（原生「精通」位 → ☆，等级第 4 档 → ◎）；
+  **任意熟练度上限设计保留**，不做 1300/1600 分档。
+- **两边统一**：新增 `src/runtime/ProficiencyMark2026.h`，修改器界面与游戏内注入
+  **共用同一套规则**（`ProficiencyMarkFor` / `ProficiencyMarkPrefix2026`）。
+  修改器侧的五角星由实心 ★ U+2605 改为**空心 ☆ U+2606**（与 `build/res/tags.PNG` 截图一致）。
+- **一个格子都没配时不替换块**：原版 140 字节块画的本来就是原生标记，语义一致；
+  这样也不会多分配内存（否则 undo 的 release 计数会从 1 变 2）。
+- 回归测试：新增 `--proficiency-mark-injection`（断言图标表内容、判定块关键指令、
+  CP950 字形、跳板）；`--proficiency-marker` 改为断言共享规则。
+
+### 调查（游戏内 ★/◎/○ 指示图标，2026-11-07 早些时候的记录，已被上一条取代）
+
+- 静态 RE 确认**游戏本体里没有 ★ (U+2605) 字形**：游戏的 Big5 字符表 `0x61CFA0..0x61CFF8`
+  只含 `• ＊ ？ 完 未 △ ◎ ○ ×` 与全角数字；符号指针表 `0x66AE30..0x66AE80` 暴露这些指针。
+- 确认 `src/generated/PatchCatalog.h` 的 1087 条注入写入**没有一条落在游戏 .rdata**
+  （774 → .text，313 → companion 自有 blob `0xA0000+`）⇒ **游戏内的五角星是 companion 自己注入绘制的**。
+- 确认熟练度 / 等级 / 阈值数据模型：熟练度 `officer+0xA4+系*2`（getter `0x44C940`）、
+  游戏原版上限 1000 在 `0x406A70`、等级 1–4 由 `0x409510` 计算
+  （阈值表 `0x64BD00/0x64BCC4/0x64BC88/0x64BD3C`）、**1500 阈值在 `0x44E9E0`**
+  （`0x44E840` 内，唯一调用者 `0x450323`）、精通/精进标志位在 `dword[officer+0xE8]`。
+- 确认 companion 的 93 字节上限注入块
+  （`recovery/evidence/payload_disassembly/004256B8_000A2190_5D.asm`）
+  与 2019 版工具 `recovery/reference-2019/San9PKHardDlg.cpp` **完全同构**
+  （等级表基址 `0xA4000`、默认 `0x3FEAA`、精进上限 `0x43FFDE` = 1500）。
+- 产出 live 取证工具 `out/_re/livediff.py`（进程内存 vs 磁盘 exe 逐字节 diff）。
+- 本节**无代码改动**；详见 `docs/HANDOVER.md` §4.10 与 `docs/SESSION_NOTE.md`。
+
 ### 变更（需求 4 武将个性化重做）
 
 - 数据模型：`OfficerPersonalization2026` 从早期 4 个单值数组改为「9 系熟练度上限（默认 1000）+ 41 个兵法发动间隔(天，默认游戏原值) + 把握概率(勾选) + 威力系数 + 威力一定加倍(勾选)」，持久化为 `San9PKHardCheat.txt`，每武将 53 个整数（9 上限 + 41 间隔 + 3 其他）。

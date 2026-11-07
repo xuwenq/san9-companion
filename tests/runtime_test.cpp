@@ -3,6 +3,8 @@
 #include "../src/model/PersonSnapshot.h"
 #include "../src/runtime/GameText.h"
 #include "../src/runtime/AppPaths.h"
+#include "../src/runtime/ProficiencyMark2026.h"
+#include "../src/runtime/BarbarianFormation2026.h"
 #include "../src/app/application/Controller.h"
 #include "../src/app/ui/RuntimeStatusText.h"
 #include <unordered_map>
@@ -1245,6 +1247,113 @@ void proficiencyMarkerTest() {
         check(covered[k],"every skill up to 30 belongs to a system");
     std::puts("Proficiency marker states, system mapping and ring scope checks passed.");
 }
+
+// 2026-11-07: the in-game proficiency indicator.
+//
+// The game draws the officer name into a fixed-width buffer.  The recovered
+// block at allocationBase+0x6960 (entered through the game's call site
+// 0x451A5C) inserts an icon column in front of the name.  The icon is looked
+// up in a uint32[800*9] table that holds the CP950 glyph followed by two
+// spaces:
+//
+//   0x2020B8A1 = 0xA1B8 (☆) + two spaces
+//   0x2020B7A1 = 0xA1B7 (◎) + two spaces
+//   0x2020B3A1 = 0xA1B3 (○) + two spaces
+//
+// 2026-11-07 crash regression: the four guard jumps of that block must be
+// NEAR jumps (0F 84 / 0F 8C / 0F 8F).  As short jumps their displacement
+// exceeded the signed rel8 range, wrapped negative and jumped outside the
+// block -- that was the crash the user hit when opening the officer list.
+void proficiencyMarkInjectionTest() {
+    resetBackend();
+    Runtime2026 runtime(api());
+    version(runtime);
+    OfficerPersonalization2026 personalization;
+    personalization.proficiencyCap[0][0]=1200;   // -> white star
+    personalization.proficiencyCap[0][1]=1600;   // -> bullseye
+    personalization.interval[0][9]=3;           // -> white circle (skill 9 = 弩兵, system 3)
+    runtime.setPersonalization(personalization);
+    recordWrites=true;
+    initialModify(runtime);
+    recordWrites=false;
+
+    // The icon table is uint32[800*9] = 28800 bytes written as one block.
+    const BYTE* table=nullptr;
+    for(const auto& entry:recordedWrites)
+        if(entry.second.size()==800*9*4) table=entry.second.data();
+    check(table!=nullptr,"the proficiency icon table is written");
+    if(table) {
+        const auto cell=[&](size_t officer,size_t system)->std::uint32_t {
+            std::uint32_t value=0;
+            std::memcpy(&value,table+(officer*9+system)*4,4);
+            return value;
+        };
+        check(cell(0,0)==0x2020B8A1u,"cap 1200 puts the CP950 white star in the table");
+        check(cell(0,1)==0x2020B7A1u,"cap 1600 puts the CP950 bullseye in the table");
+        check(cell(0,3)==0x2020B3A1u,"a shortened interval puts the CP950 white circle in the table");
+        check(cell(0,2)==0,"an unconfigured cell is empty so the game keeps the native mark");
+        check(cell(799,8)==0,"the last cell of the table is empty too");
+    }
+
+    // The code block itself: 188 bytes, written to its own address.
+    const BYTE* block=nullptr;
+    for(const auto& entry:recordedWrites)
+        if(entry.second.size()==188) block=entry.second.data();
+    check(block!=nullptr,"the proficiency icon code block is written");
+    if(block) {
+        // "mov ebp,[edi]" / "mov ecx,ebx" / "test cl,1" guard, unchanged.
+        const BYTE guard[]={0x8B,0x2F,0x8B,0xCB,0xF6,0xC1,0x01};
+        check(std::memcmp(block,guard,sizeof(guard))==0,
+            "the icon block keeps the original entry sequence");
+        // The four guard jumps must be near jumps (rel32), not short jumps.
+        const BYTE nearJne[]={0x0F,0x85};
+        const BYTE nearJl[]={0x0F,0x8C};
+        const BYTE nearJg[]={0x0F,0x8F};
+        check(std::memcmp(block+0x07,nearJne,sizeof(nearJne))==0,
+            "the first guard jump is a near jump (rel32), not a short jump");
+        check(std::memcmp(block+0x12,nearJl,sizeof(nearJl))==0,
+            "the second guard jump is a near jump (rel32), not a short jump");
+        check(std::memcmp(block+0x1B,nearJg,sizeof(nearJg))==0,
+            "the third guard jump is a near jump (rel32), not a short jump");
+        check(std::memcmp(block+0x26,nearJne,sizeof(nearJne))==0,
+            "the fourth guard jump is a near jump (rel32), not a short jump");
+        // "add byte [esp+0x5c],4" reserves the icon column.
+        const BYTE reserve[]={0x80,0x44,0x24,0x5C,0x04};
+        check(std::memcmp(block+0x2C,reserve,sizeof(reserve))==0,
+            "the icon block reserves four bytes for the icon");
+        // The default prefix is four spaces.
+        const BYTE spaces[]={0xBF,0x20,0x20,0x20,0x20};
+        check(std::memcmp(block+0x31,spaces,sizeof(spaces))==0,
+            "the icon block defaults to four spaces");
+        // The table lookup: "mov edi,[eax*4+iconTable]" with a patched disp32.
+        const BYTE lookup[]={0x8B,0x3C,0x85};
+        check(std::memcmp(block+0x4C,lookup,sizeof(lookup))==0,
+            "the icon block reads the icon table through [eax*4+table]");
+        check(block[0x4F]!=0 || block[0x50]!=0 || block[0x51]!=0 || block[0x52]!=0,
+            "the icon table address is patched into the block");
+        // "test edi,edi" then the jump to the native fallback.
+        const BYTE test[]={0x85,0xFF,0x74};
+        check(std::memcmp(block+0x53,test,sizeof(test))==0,
+            "an empty table cell falls through to the native mark");
+        // The two native glyphs, as CP950 two-byte characters with two spaces.
+        const BYTE star[]={0xBF,0xA1,0xB8,0x20,0x20};
+        const BYTE bullseye[]={0xBF,0xA1,0xB7,0x20,0x20};
+        check(std::memcmp(block+0x68,star,sizeof(star))==0,
+            "the icon block writes the CP950 white star");
+        check(std::memcmp(block+0x8E,bullseye,sizeof(bullseye))==0,
+            "the icon block writes the CP950 bullseye");
+    }
+
+    // The 5-byte JMP trampoline that replaces the old block at 0x6960.
+    bool sawJump=false;
+    for(const auto& entry:recordedWrites) {
+        if(entry.second.size()!=5) continue;
+        if(entry.second[0]!=0xE9) continue;
+        sawJump=true;
+    }
+    check(sawJump,"a JMP trampoline is installed over the old icon block");
+    std::puts("Proficiency icon injection block, icon table and trampoline checks passed.");
+}
 // The four per-officer injection blocks derive the officer index from the
 // person record itself: "movzx reg, word [ptr+4]" (CPersonData.id, the
 // person-table index 0..849). The broken 2019-era derivation used
@@ -2005,6 +2114,76 @@ void presentationSpeedRuntimeTest() {
 }
 
 void configFilesTest();
+// 2026-11-07: the barbarian formation patch.
+//
+// The game looks a formation attribute up in a 28-entry jump table at
+// 0x4FB5DC.  Entries 12, 13 and 14 all point at the game's own stub
+// 0x4FB5D3, which returns 0x3C3 -- an attribute only the barbarian factions
+// own, so a normal faction cannot pick those formations.
+//
+// We redirect those three entries to our own stub that returns 0x3CC, the
+// attribute Shape.exe uses.  The other 25 entries must keep pointing at the
+// game's code, so ordinary formations are untouched.
+void barbarianFormationTest() {
+    resetBackend();
+    Runtime2026 runtime(api());
+    version(runtime);
+    san9::FeatureSwitches2026 switches;
+    switches[san9::Feature2026::barbarianFormation]=false;
+    runtime.setFeatureSwitches(switches);
+    recordWrites=true;
+    initialModify(runtime);
+    recordWrites=false;
+
+    bool tableTouched=false;
+    for(const auto& entry:recordedWrites) {
+        const DWORD target=entry.first;
+        if(target>=san9::FormationAttributeJumpTable &&
+           target<san9::FormationAttributeJumpTable+san9::FormationAttributeCount*4)
+            tableTouched=true;
+    }
+    check(!tableTouched,"the barbarian switch off leaves the formation table alone");
+
+    // Now with the switch on.
+    resetBackend();
+    Runtime2026 runtime2(api());
+    version(runtime2);
+    runtime2.setFeatureSwitches(san9::FeatureSwitches2026{});
+    recordWrites=true;
+    initialModify(runtime2);
+    recordWrites=false;
+
+    // Collect the writes that land on the three table entries.
+    DWORD stubAddress=0;
+    for(const auto& entry:recordedWrites) {
+        if(entry.second.size()!=4) continue;
+        const DWORD target=entry.first;
+        if(target<san9::FormationAttributeJumpTable) continue;
+        if(target>=san9::FormationAttributeJumpTable+san9::FormationAttributeCount*4) continue;
+        const unsigned index=(target-san9::FormationAttributeJumpTable)/4;
+        if(index!=12 && index!=13 && index!=14) {
+            check(false,"only the barbarian entries of the formation table are rewritten");
+            continue;
+        }
+        DWORD value=0;
+        std::memcpy(&value,entry.second.data(),4);
+        stubAddress=value;
+    }
+    check(stubAddress!=0,"the barbarian entries of the formation table are redirected");
+    if(stubAddress) {
+        // The stub must live inside the game's allocation and return 0x3CC.
+        const BYTE stub[]={0xB8,0xCC,0x03,0x00,0x00,0xC3};
+        bool found=false;
+        for(const auto& entry:recordedWrites) {
+            if(entry.second.size()!=sizeof(stub)) continue;
+            if(std::memcmp(entry.second.data(),stub,sizeof(stub))!=0) continue;
+            if(entry.first==stubAddress) found=true;
+        }
+        check(found,"the redirected formation entries point at a stub that returns 0x3CC");
+    }
+    std::puts("Barbarian formation table redirection checks passed.");
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout,nullptr,_IONBF,0);
     _set_invalid_parameter_handler([](const wchar_t* expression,const wchar_t* function,const wchar_t* file,unsigned line,uintptr_t) {
@@ -2037,6 +2216,8 @@ int main(int argc, char** argv) {
             {"--game-text",gameTextTest},{"--person-snapshot",personSnapshotTest},
             {"--lifecycle",lifecycleTest},{"--personalization",personalizationConfigTest},
             {"--proficiency-marker",proficiencyMarkerTest},
+            {"--proficiency-mark-injection",proficiencyMarkInjectionTest},
+            {"--barbarian-formation",barbarianFormationTest},
             {"--injection-code-bytes",injectionCodeBytesTest},
             {"--disabled-original-block",disabledOriginalToolBlockTest},
             {"--id-table-write-guard",idTableWriteGuardTest}
@@ -2087,7 +2268,7 @@ int main(int argc, char** argv) {
         if(configurationsRequested) {
             presentationSpeedRuntimeTest();
             configFilesTest(); controllerTest(configRoot);
-            coreBoundaryTest();gameSnapshotsTest();appPathsTest();stateBoundsTest();imageBoundsTest();gameTextTest();personSnapshotTest();siegeSelectionTest();computerWorkTimingTest();personalizationConfigTest();proficiencyMarkerTest();injectionCodeBytesTest();disabledOriginalToolBlockTest();idTableWriteGuardTest();
+            coreBoundaryTest();gameSnapshotsTest();appPathsTest();stateBoundsTest();imageBoundsTest();gameTextTest();personSnapshotTest();siegeSelectionTest();computerWorkTimingTest();personalizationConfigTest();proficiencyMarkerTest();proficiencyMarkInjectionTest();barbarianFormationTest();injectionCodeBytesTest();disabledOriginalToolBlockTest();idTableWriteGuardTest();
             for(const auto& entry:configurations) entry.run((configRoot/entry.file).string().c_str());
         }
     } catch(const std::exception& error) {
@@ -2096,3 +2277,4 @@ int main(int argc, char** argv) {
     }
     std::puts("2026 offline runtime checks passed; no game process or GUI was accessed.");
 }
+

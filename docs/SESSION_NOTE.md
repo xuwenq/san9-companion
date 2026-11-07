@@ -1,6 +1,202 @@
-# 会话续接速记（2026-11-02）
+# 会话续接速记（2026-11-07）
 
-> 详细状态见 `docs/HANDOVER.md`（唯一事实源）。本文件只是本会话的快速索引。
+> 详细状态见 `docs/HANDOVER.md`（唯一事实源）。
+> **逆向结论的单一可信来源是 `docs/KNOWLEDGE_BASE.md`。**
+> 逐功能实机清单见 `docs/LIVE_TEST_PLAN.md`。
+> 本文件只是快速索引。
+
+## 2026-11-07 本轮完成（B 修 bug → C 开关 → A 知识资产化）
+
+### 0. 本轮总览
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| **B** | 修图标崩溃 + 删掉错误的培养时长写入 | ✅ |
+| **C** | 13 个逐功能开关 + 玩家蛮族阵型 | ✅ |
+| **A** | `docs/KNOWLEDGE_BASE.md` + `docs/LIVE_TEST_PLAN.md` | ✅ |
+
+**剩余唯一阻塞项：实机验证。**
+
+### 1. 图标崩溃（根因用转储坐实）
+
+- 转储：`%LOCALAPPDATA%\CrashDumps\San9PK.exe.29292.dmp`（11:26）
+- 异常码 `0xC0000005`，读地址 `0x02227028`，我们的块在 `0x02227080`
+- `0x02227028 = 0x02227080 + 0x09 − 97` → 正是守卫跳转的目标
+- **根因**：172 字节块里 4 个守卫跳转到块尾，位移 159/152/147/140 **全部 > 127**；
+  x86 rel8 是**有符号**的，`0x9F` 被解释成 −97 → 跳到块外 88 字节 → 访问违例。
+  原版 140 字节块的位移**恰好**是 127（有符号上限），纯属侥幸。
+- **修复**：4 个守卫改**近跳转**（`0F 84/8C/8F` rel32），块 172 → **188 字节**。
+  disp32 偏移：图标表 @ **0x4F**，等级表 @ **0x80**。
+- 修复时把 disp32 写到 `0x4B`，**被新增的测试断言当场抓住** → 改成 `0x4F`。✅
+
+### 2. 删除错误的培养时长写入
+
+- `0x14FA656` 是**猜的**地址，且是错的：RVA `0xFA656` 落在 **.text**
+  → 是**游戏代码的一个字节**，不是变量。每次应用配置都往那儿写 9，**一直在改坏游戏代码**。
+- 2019 版工具**根本没有**培养时长功能（只有 `m_dwTrainNumAddr` 0x40CAEF /
+  `m_dwTrainNumAddr2` 0x40BF25 / `m_dwOldTrainNum` 50）。
+- **处理**：删除该写入，配置项保留但不生效，日志明说。
+
+### 3. 新增 `tools/check_injection_blocks.py`
+
+- 读 `src/runtime/Runtime2026.cpp` 里的 `const BYTE xxx[] = {...}`，capstone
+  反汇编，断言每条跳转：① 落在指令边界 ② 在块内 ③ rel32 占位（全 0）跳过
+- 当前 **11 个块，0 个问题**
+- 坑：注释里的 hex 字面量会被误读 → 已加 `strip_comments`；
+  游戏代码片段（growth boost 的 `original[6]`）单独跳过。
+
+### 4. 逐功能开关（13 项）
+
+**新增文件**
+- `src/runtime/FeatureSwitches2026.h` / `.cpp`
+  - `enum class Feature2026`：deathGradient / growthBoost / cultivateTrainNum /
+    cultivateBasicAbility / cultivateDuration / proficiencyCap / proficiencyMark /
+    activationBoost / criticalHit / interval / barbarianFormation /
+    computerWorkTiming / skipSiegeSelection（共 13 个）
+  - 默认**全部为 on**（空 ini ≡ 开关引入前的行为）
+  - `loadFeatureSwitches(path)`：读 ini `[Features]` 段；**只认精确的 `0`/`1`**，
+    其它值一律当 off（防手误打开功能）
+  - `summary()`：输出 "1 0 1 ..." 供日志对照
+- `San9Features.ini`（仓库根目录，含中文注释）—— 全部 13 项默认 1
+- `src/runtime/BarbarianFormation2026.h`
+
+**已改代码**
+- `Runtime2026.h`：`#include "FeatureSwitches2026.h"`、`setFeatureSwitches()` /
+  `featureSwitches()` / `featureEnabled()`、成员 `featureSwitches_`、
+  3 个新私有方法 `applyActivationBoost/applyCriticalHit/applyInterval`、
+  `applyBarbarianFormation()`
+- `Runtime2026.cpp`：
+  - `applyDeathGradient` / `applyGrowthBoost` / `applyProficiencyCap` /
+    `applyProficiencyMarks` / `applyComputerWorkTiming` 开头加开关守卫
+    （关闭时**完全不注入**，日志 `FEATURE xxx : off, nothing is injected`）
+  - `applyOfficerPersonalization` **拆成 3 个独立函数**：
+    `applyActivationBoost` / `applyCriticalHit` / `applyInterval`，各自有开关
+  - `applyCultivate` 加了 `cultivateDuration` 开关（仅记录，未实现）
+  - `applyCultivate` 删除 `0x14FA656` 写入
+  - **新增 `applyBarbarianFormation()`**
+- `RuntimeInjection2026.cpp`：
+  - `0x40CAEF`/`0x40BF25` 的写入包在 `cultivateTrainNum` 开关里
+  - `codeTrainBasicAbility` 的 `sub`→`add` 两处（偏移 `+0x1D` / `+0x2E`）
+    包在 `cultivateBasicAbility` 开关里
+  - `NeglectChongCheAddr` 的写入包在 `skipSiegeSelection` 开关里
+- `src/runtime/AppPaths.h`：新增 `featureSwitchesFile()` → exe 同目录 `San9Features.ini`
+- `src/app/application/Controller.h/.cpp`：新增 `loadFeatureSwitches(path)`，
+  日志 `FEATURES: file=... summary=1 0 1 ...`
+- `src/app/ui/MainWindow.cpp`：启动时（`!smoke` 分支）调用
+  `app.loadFeatureSwitches(san9::featureSwitchesFile())`
+- `build-config/Runtime.vcxproj`：加入 `FeatureSwitches2026.cpp`
+- `build-config/Companion.vcxproj`：把 `San9Features.ini` 复制到输出目录
+
+### 5. 蛮族阵型（**已实现并通过测试**）
+
+**逆向结论（全部逐字节反汇编核对过）**
+
+游戏里的「阵型属性查表函数」**入口是 0x4FB560**（不是 0x4FB564）：
+
+```
+0x4FB560  mov  ecx,[esp+4]              ; 形参：阵型编号
+0x4FB564  or   eax,0xFFFFFFFF           ; 越界 -> -1
+0x4FB567  cmp  ecx,0x1B
+0x4FB56A  ja   0x4FB5D8
+0x4FB56C  jmp  dword ptr [ecx*4+0x4FB5DC]   ; 28 项跳转表
+0x4FB573  mov  eax,0x39C ; ret          ; case 0 的桩
+```
+
+跳转表在 **0x4FB5DC**，28 项，每项指向一段 `mov eax,imm32; ret`：
+
+| case | 返回 | case | 返回 |
+|---|---|---|---|
+|0|0x39C|14|**0x3C3**|
+|1|0x39F|15..19|-1|
+|2|0x396|20|0x3AB|
+|3|0x399|21|0x3AE|
+|4|0x3A2|22|0x3B1|
+|5|0x3A5|23|0x3B4|
+|6|0x393|24..26|-1|
+|7|0x3A8|27|**0x3C3**|
+|8|0x3BD| | |
+|9|0x3B7| | |
+|10|0x3BA| | |
+|11|0x3C0| | |
+|12|**0x3C3**| | |
+|13|**0x3C3**| | |
+
+- 12/13/14 **共用**同一个桩 0x4FB5D3（返回 0x3C3，异族专用属性）
+- case 27 也用 0x4FB5D3（返回 0x3C3）
+- 15..19 与 24..26 指向 0x4FB5D8（返回 −1）
+- 唯一调用点：`0x4FBEB6 call 0x4FB560`（形参 `ebx` 是阵型编号）
+
+**Shape.exe（第三方修改器）的做法**（已逐字节核对）：
+- `0x4701E5`：1 字节 `0x0B`→`0x15`（`push 0x0B` 的 imm8）—— 与阵型无关
+- `0x470205`：1 字节 `0x17`→`0x14`（`push 0x17` 的 imm8）—— 与阵型无关
+- `0x4FB564`：8 字节 `B8 CC 03 00 00 90 90 90` = `mov eax,0x3CC` + 3 nop
+  → **整个函数恒返回 0x3CC**，所有阵型属性都被抹平
+
+**我们的实现（比 Shape.exe 温和）**
+- 只把跳转表的 **12/13/14 三项**改指向我们自己的 6 字节桩
+  `B8 CC 03 00 00 C3`（`mov eax,0x3CC; ret`）
+- 其余 25 项**原样不动** → 普通阵型的属性完全不受影响
+- 桩放在分配区 `AllocationBase + 0xA000`
+  （分配区 11 页 = 0xB000，已用到 0x6960+188，所以 0xA000 是空的）
+- 写 3 个 dword 到 `0x4FB5DC + index*4` → 0x4FB60C / 0x4FB610 / 0x4FB614
+
+**注意**：这两处补丁写的是**游戏的 .text**（0x4FB5DC），需要
+`VirtualProtectEx` 改保护属性。运行时用的是 `writeBytes`，
+测试桩里 `inGame` 范围是 `0xA0000..0x2000000`（绝对地址），
+实测通过（测试用 base=0x22000000 的分支）。
+
+**界面字幕**：`assets/ui/dialogs.rc` 控制 1047 由「启用电脑蛮族阵型」
+改为「**启用玩家蛮族阵型**」（`tools/dialog_customizations.py` 同步）。
+⚠️ `.rc` **不能**用 `tools/reconstruct.py` 重新生成（会丢掉手工布局改动，
+并把简体「斗舰」变回繁体「鬥舰」），要改就直接编辑 `.rc`。
+
+### 6. 开关拆分粒度（按用户批准的"你倾向的拆开"）
+
+| 开关 | 控制的东西 |
+|---|---|
+| DeathGradient | 阵亡能力渐变 |
+| GrowthBoost | 成长倍率 |
+| CultivateTrainNum | 小兵培养：强制提拔（0x40CAEF / 0x40BF25）|
+| CultivateBasicAbility | 小兵培养：基础能力系数反转 |
+| CultivateDuration | 培养时长（**未实现**，只记录）|
+| ProficiencyCap | 熟练度上限 |
+| ProficiencyMark | ☆/◎/○ 图标 |
+| ActivationBoost | **把握概率**（发动骰 0x4FEC59）|
+| CriticalHit | **威力一定加倍 / 会心**（0x50603B）|
+| Interval | **兵法发动间隔**（0x4FF08B）|
+| BarbarianFormation | 玩家蛮族阵型 |
+| ComputerWorkTiming | 电脑作业时机 |
+| SkipSiegeSelection | 跳过耐久攻城选择 |
+
+⚠️ **命名与语义曾经对不上**：`ActivationBoost` / `CriticalHit` / `Interval`
+这三个键名沿用了 `OfficerPersonalization2026` 的字段名，实际语义是
+「把握概率 / 威力一定加倍 / 兵法发动间隔」。
+`FeatureSwitches2026.h` 的枚举注释与 `San9Features.ini` 的注释是权威。
+
+### 7. 测试现状（最新）
+
+- Debug 构建通过
+- `--all assets/config` **exit=0**（全部通过）
+- `--barbarian-formation` 通过
+- `--proficiency-mark-injection` 通过
+- `tools/check_injection_blocks.py` 11 块 0 问题
+- Release + Publish 构建通过，`out/trial/` 已重新出包（含 `San9Features.ini`）
+
+**测试文件历史事故**：`git checkout tests/runtime_test.cpp` 曾经把
+未提交的 `proficiencyMarkInjectionTest`（188 字节断言 + 4 条近跳转断言）
+整个丢掉，已用 一个一次性 Python 补丁脚本 重写恢复。**该文件是 CRLF**，
+用 `sed -i` 会把整行尾变成 LF → 之后用 Python 读写并显式保留 `\r\n`。
+**绝不要 `git checkout` 未提交的工作。**
+
+### 8. 新增文档
+
+- `docs/KNOWLEDGE_BASE.md` —— 知识总表：地址→用途→证据→置信度；数据模型；
+  CP950 字形表；**x86 注入陷阱库**（rel8 有符号！rel32 字段偏移约定不同！栈平衡！…）；
+  已被推翻的结论；注入代码地图；实机验证状态表。
+- `docs/LIVE_TEST_PLAN.md` —— 逐功能实机测试清单：
+  每项写清「开哪些开关 / 期望结果 / 怎么判断」+ 二分法定位步骤。
+
+---
 
 ## 2026-11-02 本轮完成
 
@@ -95,7 +291,113 @@
 
 ---
 
-# 上一轮（2026-11-01）记录
+# 2026-11-07 本轮：游戏内 ★/◎/○ 指示图标（Request F 续）—— **已定位并实现**
+
+> 本段记录最终结论。**上一轮写的「静态 RE 已穷尽、必须 live 取证」是错的，已推翻。**
+> 绘制代码静态就能查到，不需要 live 取证。
+
+## 1. 关键结论
+
+### 1.1 游戏本体里没有 ☆/★ 字形 ⇒ 游戏内的五角星是 companion 自己画的
+
+- 游戏的字符表 `0x61CFA0..0x61CFF8`（**Big5/CP950**）只含
+  `U+FF19..U+FF10`、`•`(0x61CFD0)、`＊`(0x61CFD4)、`？`(0x61CFDC)、`完`(0x61CFE4)、
+  `未`(0x61CFE8)、`△`(0x61CFEC)、`◎`(0x61CFF0)、`○`(0x61CFF4)、`×`(0x61CFF8)。
+- **CP950 编码表（本项目必须记住）**：
+  **☆ U+2606 = `a1 b8`、★ U+2605 = `a1 b9`、◎ U+25CE = `a1 b7`、
+  ○ U+25CB = `a1 b3`、△ U+25B3 = `a1 b5`、× = `a1 d1`、： = `a1 47`、？ = `a1 48`**
+  （早先误用 Big5 `a1 49` 找 ★，得出「游戏里没有 ★」的错误结论；用户提示后纠正。）
+
+### 1.2 绘制代码 = 2019 工具遗产 `codePersonCharNum`（140 字节）
+
+| 项 | 位置 |
+| --- | --- |
+| 2019 源码 | `recovery/reference-2019/InsertAsm.h:10230`（`dwAddrPersonCharNum = dwAddrStackBottom + 0x6900`） |
+| companion 镜像 | `src/generated/companion_data.bin` 偏移 `0x6F88`（companion VA `0x425F88`） |
+| 运行时落点 | `RuntimeInjection2026.cpp:415` `writePatch(dword_42F270, &codePersonCharNum, 0x8Cu)` ⇒ **注入分配区 `allocationBase+0x6960`** |
+| 进入路径 | descriptor `0x426028`（`{target=0x451A5C, len=5, source=0x426014}`）把游戏 `0x451A5C` 的 `mov edx,[edi]; mov eax,[edx-8]` 换成 `call 0xA6960` |
+
+⚠️ **两条被推翻的旧结论**：
+1. 「140 字节覆盖游戏 `0x425F88`」**错**。`PatchCatalog.h` 的 `StaticWrite` 字段顺序是
+   `{callVA, functionVA, targetVA, sourceVA, size, bytes}` ⇒ 那行
+   `{0x0040C163, 0x00409E10, 0x000A6960, 0x00425F88, 140, ...}`
+   的 **target = `0xA6960`（分配区）**、**source = `0x425F88`（companion 镜像位置）**。
+   全仓核实：**没有任何代码写游戏 VA `0x425F88`**，游戏那 140 字节原样未动。
+   `PatchCatalog.h` 也没有被任何 `src/` 文件 include（只是 `tools/reconstruct.py` 生成的审计产物）。
+2. 「必须 live 取证」不成立。
+
+### 1.3 原版 140 字节块的判定逻辑（完整反汇编）
+
+```
+mov  ebp,[edi]              ; 文本缓冲
+mov  ecx,ebx / test cl,1    ; 守卫：ebx 必须为偶
+shr  cl,1 ; cmp cl,'1'/'9'  ; 守卫：系统号 1..9
+cmp  byte [esp+0x2C],'8'    ; 守卫：必须是「熟练度」那一行
+add  byte [esp+0x5C],4      ; 给图标预留 4 字节
+mov  edi,0x20202020         ; 默认 4 个空格（无图标）
+mov  eax,[esi+0xE8]         ; 原生「精通」标志位（位 3..11 = 9 个系）
+shr  eax,cl ; and al,1
+mov  edi,0x2020B8A1         ; "  " + a1 b8 = ☆   ← 原生精通
+; 再查 companion 自己的等级表 0xA4000[officer] 的 2bit*系 == 3
+mov  edi,0x2020B7A1         ; "  " + a1 b7 = ◎   ← 原生精进（覆盖 ☆）
+```
+**它和熟练度上限数值毫无关系**：☆ 由原生「精通」位决定，◎ 由等级表第 4 档决定。
+
+### 1.4 熟练度 / 等级 / 阈值数据模型（不变）
+
+| 项 | 地址 |
+| --- | --- |
+| 熟练度存储 | `officer + 0xA4 + 系*2`（word）；getter `0x44C940` / setter `0x44C960` / limadd `0x44C980` |
+| 游戏原版上限 1000 | `0x406A70`（`cmp eax,0x3E8`） |
+| 等级 1/2/3/4 | `0x409220` / `0x409510`；阈值表 `0x64BD00`、`0x64BCC4`、`0x64BC88`、`0x64BD3C` |
+| **1500 阈值** | `0x44E9E0`（`0x44E840` 内，唯一调用者 `0x450323`） |
+| 精通/精进标志位 | `dword [officer+0xE8]`；set `0x44C8A0` / clear `0x44C8B0`；`PersonSnapshot.cpp:14` 读 `(word(0xE8)>>3)&0x1FF` |
+| companion 任意上限 | `applyProficiencyCap()` 用 `uint16[800][9]` 表替换 `AllocationBase+0x2190` 的 93 字节块 |
+
+## 2. 用户确认的口径（2026-11-07）
+
+1. **配置优先，未配置回落原生**：配了上限或间隔 → companion 的图标；
+   没配 → 原生标记（精通 → ☆，精进 → ◎）。
+2. **两边都用空心 ☆ U+2606**（与 `build/res/tags.PNG` 一致）。
+3. **任意熟练度上限设计保留**，不做 1300/1600 分档。
+
+## 3. 实现（本轮已完成）
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/runtime/ProficiencyMark2026.h`（新） | 修改器与游戏内**共用**的规则：`ProficiencyMarkFor` / `ProficiencyMarkPrefix2026` / `ProficiencyMarkText2026`。五档 `unconfigured/none/star/refined/interval`，前缀 `0 / 0x20202020 / 0x2020B8A1 / 0x2020B7A1 / 0x2020B3A1` |
+| `src/runtime/Runtime2026.cpp` | 新增 `applyProficiencyMarks()`：算 `uint32[800*9]` 前缀表 → 上传 → 写判定块（**188 字节**，见上）→ 在 `allocationBase+0x6960` 放 5 字节 `E9` 跳板 |
+| `src/runtime/RuntimeInjection2026.cpp` | 在 `applyProficiencyCap()` 之后调用 `applyProficiencyMarks()` |
+| `src/app/ui/Pages.cpp` | `proficiencyMark()` 改为复用共享规则；**实心 ★ U+2605 → 空心 ☆ U+2606** |
+| `tests/runtime_test.cpp` | 新增 `--proficiency-mark-injection`；`--proficiency-marker` 改断言共享规则 |
+
+**为什么用跳板**：判定块 > 原槽位 `0x6960..0x6A00` 的 160 字节，会压到
+`codeMoveGuardTroop@0x6A00`。跳板（5 字节 `E9`）是 `applyOfficerPersonalization` 里
+间隔 hook 用的同一套路。
+
+**注入空间核算**：注入分配区 `0xA0000..0xB0000` 共 45KB，已占 33.2KB，
+空闲连续段有 `0x095E..0x10000`（**22.2KB**）等。图标表 `uint32[800*9]` = 28.8KB
+放不进分配区，所以图标表 + 判定块一起放进 `applyProficiencyMarks` 自己新分配的一块内存，
+分配区只放 5 字节跳板。**空间充足。**
+
+**一个格子都没配时不替换块**：原版 140 字节块画的本来就是原生标记，语义一致；
+且这样不会多分配内存 —— 否则 undo 的 release 计数会从 1 变 2，
+`runtime_test.cpp` 的 `undo releases allocation and handle` 会挂（这个坑踩过一次）。
+
+**验证**：Debug/Release/Publish 三个配置全部构建通过；
+`--all assets/config` 通过；`--ui-smoke` 通过；全套离线测试通过。
+
+**实机待验**：游戏武将列表里打开有熟练度的界面，确认
+① 配置过的格子显示 ☆/◎/○；② 没配置的格子仍显示原生 ☆/◎；③ 无崩溃。
+
+## 4. 工具与脚本
+
+- 教训：脚本名不要叫 `re.py`（遮蔽标准库，导致 capstone 循环导入）；用 `rex.py`。
+- 教训：CP950 的 ★ 是 `a1 b9`、☆ 是 `a1 b8`；找字形前先确认编码表。
+
+---
+
+# 上一轮（2026-11-02）记录
 
 ## 已完成并验证
 

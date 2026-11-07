@@ -53,6 +53,7 @@
     <None Include="..\assets\ui\*.ico" />
     <None Include="..\assets\ui\dialogs.rc" />
     <ConfigFile Include="..\assets\config\*.txt" />
+    <ConfigFile Include="..\San9Features.ini" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="Runtime.vcxproj">

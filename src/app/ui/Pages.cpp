@@ -4,6 +4,7 @@
 #include "ConfigFileText.h"
 #include "../../runtime/AppPaths.h"
 #include "../../runtime/OfficerPersonalization2026.h"
+#include "../../runtime/ProficiencyMark2026.h"
 #include "../../runtime/Runtime2026.h"
 #include <algorithm>
 #include <iterator>
@@ -324,30 +325,15 @@ class PersonPage final : public ui::Dialog
     // 优先级：环 > 圈 > 五角星 > 无。环优先是因为「缩短发动间隔」是逐兵法的改动，
     // 比上限更能一眼看出配置生效了。
     //
+    // 字形与游戏内注入完全一致（共享 ProficiencyMark2026）：
+    //   空心五角星 ☆ U+2606、同心圆 ◎ U+25CE、空心圆圈 ○ U+25CB。
     // 原版（SanIXPKCheat）用的是 8×8 的复选框，反映的是武将「精通」标志位，
     // 与熟练度数值无关；两个原始二进制里都没有可复用的图标位图资源
-    // （游戏只有 12×10 / 33×11 的光标位图，2019 版工具没有任何位图资源，
-    // 原版作弊器的 25 BITMAP + 17 ICON 是打包加密的）。所以这里的三个字形
-    // 用宋体的 Unicode 码位直接画：★ U+2605、◎ U+25CE、○ U+25CB。
+    // （游戏只有 12×10 / 33×11 的光标位图，2019 版工具没有任何位图资源）。
     std::wstring proficiencyMark(size_t system) const
     {
-        const auto cap = personalizationDraft.proficiencyCap[index][system];
-        // 环：该系至少有一个兵法的发动间隔比游戏原值短。
-        bool shortened = false;
-        for (auto skill : OfficerPersonalization2026::systemSkills[system])
-        {
-            if (skill == OfficerPersonalization2026::NoSkill) break;
-            if (personalizationDraft.interval[index][skill] <
-                OfficerPersonalization2026::defaultInterval[skill])
-            {
-                shortened = true;
-                break;
-            }
-        }
-        if (shortened) return L"○";      // 环（用圈字符近似，见手册说明）
-        if (cap == 0 || cap == OfficerPersonalization2026::DefaultCap) return {};
-        if (cap > OfficerPersonalization2026::RefinedCap) return L"◎";
-        return L"★";
+        return san9::ProficiencyMarkText2026(
+            san9::ProficiencyMarkFor(personalizationDraft, index, system));
     }
     void refreshProficiencyMarks()
     {

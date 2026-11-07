@@ -14,6 +14,13 @@ def control_title(dialog_id, control_id, original):
     if (dialog_id, control_id) == (133, 1133):
         assert original == "自动同步配置信息"
         return "自动应用都市配置"
+    if (dialog_id, control_id) == (131, 1047):
+        # 「启用电脑蛮族阵型」->「启用玩家蛮族阵型」。
+        # The checkbox no longer drives the original computer-only stub; it now
+        # drives our own patch that rewrites the formation attribute table, so
+        # the player can pick the barbarian formations too.
+        assert original == "启用电脑蛮族阵型", original
+        return "启用玩家蛮族阵型"
     return original
 
 
